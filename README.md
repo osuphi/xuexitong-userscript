@@ -1,82 +1,132 @@
-# GUI 面板可拖动补丁（基于 ywdddddddddd/xuexitongScript V3.6）
+# 学习通自动刷课脚本 V3.6（GUI 面板可拖动）
 
-## 基线
+学习通（超星）课程视频自动播放与自动切换的浏览器脚本，右上角带一个可拖动的可视化监控面板。
 
-- 来源：`ywdddddddddd/xuexitongScript` 默认分支 `master`（提交 `7a7a51a`）
-- 原始源码 `v3_optimized.js` 的 git blob：`cd5d54b4aae93d53f35074326fe20dedb0be0903`（180574 字节）
-- 原始油猴版 `v3_optimized.user.js` 的 git blob：`4447e621e4e32119d6cbbf748b8239dcb1fc6093`（181257 字节）
-- 用本目录的 `scripts/build-userscript.mjs` 重新构建，能逐字节复现上面这个油猴版 blob —— 说明基线正确，补丁只动了它该动的地方。
+## 简介
 
-## 怎么装
+本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上加了一处本地补丁：**右上角的 GUI 监控面板支持拖动**。补丁细节见 [docs/拖动补丁说明.md](docs/拖动补丁说明.md)。
 
-1. 打开油猴（Tampermonkey）→ 添加新脚本 / 或者直接把 `v3_optimized.user.js` 拖进浏览器，确认安装。
-2. 版本号已从 `3.6.0` 提到 `3.6.0.1`（`@name`、`@namespace` 都没改），所以它会**就地替换**你已经装的那一份，而不是并排多出一个。
-3. 装完刷新学习通页面，控制台会多一行：`[GUI] 面板已支持拖动：按住标题栏移动（位置仅在本次页面会话内有效）`。
+解决什么问题：
 
-## 怎么用
+- 学习通的课程视频需要一节一节手动点开，中途被暂停还要手动恢复；
+- 原有的监控面板固定在右上角，会挡住视频画面或左侧课程目录。
 
-- 按住面板顶部的标题栏（"学习通脚本监控 V3.6" 那一行）拖动即可。
-- 点标题栏右侧的 `—` / `+` 折叠按钮**不会**触发拖动，功能照旧。
-- 拖到屏幕外会被自动限制在可视区域内（左上角坐标钳到 `[0, 视口 - 面板尺寸]`）。
-- 位置**只记在内存**里：刷新页面回到右上角；同一次页面会话内如果调用 `app.run()` 重建面板，会沿用你拖到的位置。
-- 这与本脚本"不写 localStorage"的约定一致。想要刷新后也能记住位置，需要在补丁里再加一段 `localStorage` 读写——需要的话告诉我。
+适合谁：需要在学习通上连续观看课程视频、并希望用可视化面板随时确认脚本运行状态的用户。
 
-## 改了什么（一共 4 处，+81/−2 行）
+## 功能
 
-1. **状态字段**：新增 `_guiDragHandlers`、`_guiPos`（挨着既有的 `_guiPanelEl` 等 GUI 状态声明）。
-2. **面板定位**：`_guiInit()` 里如果本会话拖过面板，先按 `_guiPos` 恢复 `left/top` 并把 `right` 置为 `auto`。
-3. **拖动手柄**：标题栏 `header` 加上 `cursor:move; user-select:none; touch-action:none`，并挂上 `pointerdown/pointermove/pointerup/pointercancel`。用 Pointer Events + `setPointerCapture`，鼠标和触屏都支持；拖动开始时把面板从 `right/top` 定位切换成 `left/top`，否则两个方向会互相打架。
-4. **清理**：`_guiDestroy()` 里摘掉这 4 个监听，保持本脚本"`destroy()` 后页面零残留监听"的既有约定（它的对抗测试里有对应的净增量断言）。
+- 自动播放课程视频，并按配置倍速播放（默认 1.0 原速）
+- 自动切换：同小节的下一个视频任务点 → 下一小节 → 下一章
+- 小节内有多个视频任务点时逐个播完，不会只播第一个
+- 异常暂停/卡顿自动恢复：只在"进度确实停滞"时才动手，带冷却与每小节次数上限
+- 页面切到后台时保持播放（后台保活）
+- 拦截平台"鼠标移出页面自动暂停"的防挂机暂停
+- 片尾停滞保护：即将播完且平台已标记任务点完成时直接推进
+- 视频元素自动发现：多层 iframe、跨域 frame 容错、节点失效后缓存重查
+- 任务点弹窗处理：点"去学习/去完成"回到未完成任务点，而不是硬点"下一节"
+- 右上角 GUI 监控面板：**可拖动（本项目补丁）**、可折叠、镜像控制台日志、提供快捷按钮
+- 可选能力（均默认关闭）：文档任务点自动翻阅、互动题大模型应答、内嵌章节测验/作业自动作答
 
-标注：源码里所有新增代码都用 `拖动补丁` 注释包起来了，方便你以后对照上游新版本重新打一遍。
+## 技术栈
 
-另外有一处无关紧要的差异：文件末尾多了一个换行符（上游那份结尾没有换行）。对执行没有任何影响。
+- 原生 JavaScript —— 浏览器内运行的 IIFE，无框架、无打包器、无运行时依赖
+- jQuery 3.6 —— 优先使用课程页面自带的；页面没有时才回退到 CDN
+- Tampermonkey —— 油猴版通过 `GM_xmlhttpRequest` 发起可选的 LLM 请求
+- Node.js —— **仅**用于把唯一源码拼装成油猴版，见 [scripts/build-userscript.mjs](scripts/build-userscript.mjs)
 
-## 如果想先试一下，不重装
+## 环境要求
 
-在页面控制台粘这段，可以给**当前已经加载的**面板临时加上拖动（刷新即失效，适合先确认手感）：
+- 现代浏览器（Chrome / Edge / Firefox）—— 拖动功能依赖 Pointer Events
+- Tampermonkey 扩展（推荐；也可以把源码直接粘进浏览器控制台）
+- Node.js >= 20.11 —— **仅**在需要重新生成油猴版时用到（构建脚本使用了 `import.meta.dirname`）
 
-```js
-(() => {
-    const panel = document.getElementById('xt-gui-panel');
-    if (!panel) return console.warn('没找到面板：确认脚本已运行且 guiEnabled=true');
-    const header = panel.firstElementChild;
-    let dragging = false, px = 0, py = 0;
-    const down = (e) => {
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-        if (e.target.closest && e.target.closest('button')) return;
-        const r = panel.getBoundingClientRect();
-        dragging = true; px = e.clientX - r.left; py = e.clientY - r.top;
-        panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px'; panel.style.right = 'auto';
-        header.style.cursor = 'grabbing';
-        try { header.setPointerCapture(e.pointerId); } catch (err) {}
-        e.preventDefault();
-    };
-    const move = (e) => {
-        if (!dragging) return;
-        const w = panel.offsetWidth, h = panel.offsetHeight;
-        panel.style.left = Math.min(Math.max(0, e.clientX - px), Math.max(0, innerWidth - w)) + 'px';
-        panel.style.top = Math.min(Math.max(0, e.clientY - py), Math.max(0, innerHeight - h)) + 'px';
-    };
-    const up = () => { dragging = false; header.style.cursor = 'move'; };
-    header.style.cursor = 'move'; header.style.userSelect = 'none'; header.style.touchAction = 'none';
-    header.addEventListener('pointerdown', down);
-    header.addEventListener('pointermove', move);
-    header.addEventListener('pointerup', up);
-    header.addEventListener('pointercancel', up);
-    console.log('已启用拖动（临时，刷新后失效）');
-})();
+## 安装
+
+```bash
+git clone https://github.com/osuphi/xuexitong-userscript.git
+cd xuexitong-userscript
 ```
 
-## 怎么改回来 / 怎么跟上游新版本
+> 本仓库目前是私有仓库，`clone` 需要登录凭据。本脚本没有 npm 依赖，**不需要执行 `npm install`**。
 
-- 回滚：删掉源码里 4 处 `拖动补丁` 注释包住的代码，再执行 `node scripts/build-userscript.mjs` 重新生成油猴版即可。
-- 上游出新版时：把本目录的 `scripts/build-userscript.mjs` 里的元数据块替换成新版的，用新版源码覆盖 `v3_optimized.js`，然后按上面 4 处重新插入拖动代码。
+安装脚本：
 
-## 验证到什么程度
+1. 打开 Tampermonkey → 「添加新脚本」；
+2. 用 `v3_optimized.user.js` 的内容替换编辑器里的默认模板，`Ctrl+S` 保存（或直接把该文件拖进浏览器窗口，按提示安装）；
+3. 打开学习通课程播放页，脚本会自动启动。
 
-- 已做：`node --check` 语法检查（源码与油猴版都通过）；两个入口逐字节同步校验（油猴版 = 元数据 + 源码）；与上游基线的 diff 复核（+81/−2，全部集中在 GUI 部分）。
-- 未做：真机运行验证（这台机器没有浏览器自动化环境，也没有 jsdom 装不上依赖）。建议你装好后按下面三步确认：
-  1. 面板是否正常出现，按钮（暂停/继续、下一节、设置 Key…）是否照旧可用；
-  2. 按住标题栏拖动，是否跟手、松手后停住；
-  3. 点 `—` 折叠、再点 `+` 展开，是否正常且没有被误判成拖动。
+## 使用
+
+打开学习通课程页（地址包含 `/mycourse/studentstudy`），脚本自动运行，右上角出现监控面板。
+
+面板操作：
+
+- **拖动**：按住顶部标题栏拖到任意位置（位置仅在本次页面会话内有效，刷新后回到右上角）
+- **折叠**：点标题栏右侧的 `—` / `+`
+- **按钮**：暂停/继续、下一节、LLM 开/关、自动提交 开/关、设置 Key、清空日志
+
+页面控制台里可以拿到 `app` 对象：
+
+```js
+app.run();                        // 重新启动
+app.nextUnit();                   // 立即切到下一小节
+app.resumeAutoPlay();             // 取消"用户主动暂停"状态，恢复自动保活
+app.destroy();                    // 停止并清理定时器与事件监听
+app.configs.playbackRate = 2;     // 改倍速后再执行 app.run()
+```
+
+## 构建
+
+本仓库遵循"单一源码"约定：`v3_optimized.js` 是唯一实现，`v3_optimized.user.js` 是构建产物，**不要手改油猴文件**。修改源码后执行：
+
+```bash
+node scripts/build-userscript.mjs
+```
+
+## 目录结构
+
+```
+.
+├── v3_optimized.js              # 唯一源码（可直接粘进控制台运行）
+├── v3_optimized.user.js         # Tampermonkey 油猴版（构建产物）
+├── scripts/
+│   └── build-userscript.mjs     # 由源码生成油猴版
+└── docs/
+    └── 拖动补丁说明.md           # 本项目补丁的改动清单、验证方式与回滚方法
+```
+
+## 默认配置
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `playbackRate` | `1.0` | 平台按服务端统计学时，加速可能导致学时不达标 |
+| `autoplay` | `true` | 进入视频页自动播放 |
+| `guiEnabled` | `true` | 右上角监控面板（纯本地 DOM，零网络请求） |
+| `pauseGuard` | `true` | 拦截无用户意图的暂停（最近 1.5 秒有操作则放行） |
+| `interactionGuard` | `true` | 检测视频内互动题弹窗并暂停自动跳转 |
+| `llmEnabled` | `false` | 互动题大模型应答，需自备密钥，密钥只存内存 |
+| `llmAutoSubmit` | `false` | 关闭时只选答案，提交留给人点 |
+| `llmChapterTest` | `false` | 章节测验只给建议、不自动点击 |
+| `llmEmbeddedWork` | `false` | 开启后会填答案并走平台原生提交流程 |
+| `docTaskScroll` | `false` | 文档类任务点（PDF/PPT）自动翻阅 |
+| `autoAdvanceNoVideo` | `false` | 无视频节点时是否自动前进 |
+
+## 已知限制
+
+- **倍速与任务点由服务端判定**，脚本无法绕过；部分课程会忽略本地倍速或要求完整观看才计学时。
+- **频繁抢播可能触发风控**，因此自动恢复播放有冷却和每小节次数上限，达到上限后需要人工介入。
+- **缺少完成标记的无视频节点无法自动判断**，脚本会安全停止，需要手动确认后再执行 `app.nextUnit()`。
+- **页面改版会导致选择器失配**，届时日志会给出可操作提示，按提示刷新或手动点选小节即可。
+- **私有仓库无法用 URL 直接安装油猴脚本**，请使用仓库内的本地文件安装。
+- **面板位置不持久化**，刷新页面后回到右上角（与脚本"不写 localStorage"的约定一致）。
+
+## 免责声明
+
+本项目仅用于个人学习与浏览器自动化技术研究。使用本脚本产生的任何后果由使用者自行承担；请自行确认你的使用方式符合所在课程与平台的规定。
+
+## 来源与致谢
+
+- 派生自 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（`master` 提交 `7a7a51a`）
+- 上游项目：[chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)
+- V3.6 在 V3.4 的收敛式修复（导航死锁、多视频任务点、视频元素发现、风控相关暂停处理等）基础上叠加，修复依据来自上游的 issue 反馈与多个 PR 的思路
+- 基线校验：本项目改动前的原始 `v3_optimized.js` git blob 为 `cd5d54b4aae93d53f35074326fe20dedb0be0903`，油猴版为 `4447e621e4e32119d6cbbf748b8239dcb1fc6093`，用本仓库构建脚本可逐字节复现
