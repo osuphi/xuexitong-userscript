@@ -4,10 +4,12 @@
 
 ## 简介
 
-本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上加了两处本地补丁：
+本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上叠加了四处本地补丁（均已在实机验证）：
 
 1. **右上角的 GUI 监控面板支持拖动** —— 见 [docs/拖动补丁说明.md](docs/拖动补丁说明.md)
 2. **一键导出诊断报告**（日志 + 运行状态 + 选择器命中情况）—— 见 [docs/诊断导出说明.md](docs/诊断导出说明.md)
+3. **暂停误判修复**：调音量、点恢复播放后鼠标移出，不再被误判成"用户主动暂停" —— 见 [docs/暂停误判修复.md](docs/暂停误判修复.md)
+4. **启动 jQuery 策略修复**：优先使用页面自带的 jQuery，不再注入 CDN 版顶掉页面插件 —— 见 [docs/启动jQuery修复.md](docs/启动jQuery修复.md)
 
 解决什么问题：
 
@@ -112,7 +114,9 @@ node scripts/build-userscript.mjs
 │   └── build-userscript.mjs     # 由源码生成油猴版
 └── docs/
     ├── 拖动补丁说明.md           # 面板拖动补丁的改动清单、验证方式与回滚方法
-    └── 诊断导出说明.md           # 诊断导出的内容、用法与隐私说明
+    ├── 诊断导出说明.md           # 诊断导出的内容、用法与隐私说明
+    ├── 暂停误判修复.md           # F17/F19：暂停被误判为用户意图的根因与修复
+    └── 启动jQuery修复.md         # F18：jQuery 获取策略与页面插件冲突的修复
 ```
 
 ## 默认配置
@@ -132,6 +136,8 @@ node scripts/build-userscript.mjs
 | `autoAdvanceNoVideo` | `false` | 无视频节点时是否自动前进 |
 | `diagEnabled` | `true` | 收集日志与运行状态用于导出（与面板开关独立） |
 | `diagLogMaxLines` | `2000` | 诊断日志缓冲上限（最小 50 条） |
+| `diagCaptureErrors` | `true` | 是否捕获页面未处理错误 |
+| `diagErrorEchoMax` | `5` | 最多对前几条「不同」错误做控制台提示，之后只写入报告（防止页面高频报错刷屏） |
 
 ## 已知限制
 
