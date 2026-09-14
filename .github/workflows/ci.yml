@@ -1,0 +1,39 @@
+name: CI
+
+# 本项目没有任何第三方依赖：测试用 Node 内置的 node:vm 从源码里抽代码块执行，
+# 所以 CI 不需要 npm install，跑得很快。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: 语法 / 同步 / 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 语法检查
+        run: |
+          node --check v3_optimized.js
+          node --check v3_optimized.user.js
+          for f in scripts/*.mjs tests/*.mjs; do node --check "$f"; done
+
+      - name: 校验油猴版与源码同步
+        run: node tests/verify-sync.mjs
+
+      - name: 单元测试
+        run: |
+          node tests/test-startup.mjs
+          node tests/test-pause-fix.mjs
+          node tests/test-diag.mjs
+
+      - name: 红线静态扫描（不注入 / 不劫持事件 / 不新增网络请求）
+        run: node tests/redlines.mjs

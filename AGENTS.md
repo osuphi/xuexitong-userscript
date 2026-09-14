@@ -1,6 +1,6 @@
 # AGENTS.md — 给 AI / 自动化助手的工作约定
 
-本文件是给 AI 助手（以及任何自动化改代码的工具）的入口。**动手前请先读 [`docs/架构与维护指南.md`](docs/架构与维护指南.md)**，它包含架构、状态字段速查表与改动流程；本文件只列最关键的约定。
+本文件是给 AI 助手（以及任何自动化改代码的工具）的入口。**动手前请先读 [`docs/architecture.md`](docs/architecture.md)**，它包含架构、状态字段速查表与改动流程；本文件只列最关键的约定。
 
 ## 这个仓库是什么
 
@@ -23,12 +23,14 @@
 node scripts/build-userscript.mjs      # 重新生成油猴版
 node --check v3_optimized.js           # 语法
 node --check v3_optimized.user.js
-node test-startup.mjs                  # 23 项
-node test-pause-fix.mjs                # 33 项（含"用户意图判定矩阵"）
-node test-diag.mjs                     # 50 项
+node tests/verify-sync.mjs             # 油猴版 = 元数据 + 源码
+node tests/test-startup.mjs            # 34 项
+node tests/test-pause-fix.mjs          # 33 项（含"用户意图判定矩阵"）
+node tests/test-diag.mjs               # 50 项
 ```
 
-- 测试脚本位于作者工作区（`work/`），思路见 [架构与维护指南](docs/架构与维护指南.md) 第 10 节：从源码抽代码块、配桩执行、静态约束检查。
+- 测试位于仓库 `tests/`，**不依赖任何第三方包**（用 Node 内置 `node:vm` 从源码里抽代码块执行），CI 里会跑同样的命令，见 `.github/workflows/ci.yml`。
+- 写新用例的思路与坑见 [架构与维护指南](docs/architecture.md) 第 10 节。
 - 测试里抽取的代码块**看不到 IIFE 作用域变量**，需要给同名桩；`vm.runInNewContext` 若求值的是函数表达式，记得再调用一次。
 - 静态断言要**去掉行注释**再扫描。
 

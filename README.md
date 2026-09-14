@@ -6,10 +6,10 @@
 
 本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上叠加了四处本地补丁（均已在实机验证）：
 
-1. **右上角的 GUI 监控面板支持拖动** —— 见 [docs/拖动补丁说明.md](docs/拖动补丁说明.md)
-2. **一键导出诊断报告**（日志 + 运行状态 + 选择器命中情况）—— 见 [docs/诊断导出说明.md](docs/诊断导出说明.md)
-3. **暂停误判修复**：调音量、点恢复播放后鼠标移出，不再被误判成"用户主动暂停" —— 见 [docs/暂停误判修复.md](docs/暂停误判修复.md)
-4. **启动 jQuery 策略修复**：优先使用页面自带的 jQuery，不再注入 CDN 版顶掉页面插件 —— 见 [docs/启动jQuery修复.md](docs/启动jQuery修复.md)
+1. **右上角的 GUI 监控面板支持拖动** —— 见 [docs/patches/gui-drag.md](docs/patches/gui-drag.md)
+2. **一键导出诊断报告**（日志 + 运行状态 + 选择器命中情况）—— 见 [docs/patches/diagnostics.md](docs/patches/diagnostics.md)
+3. **暂停误判修复**：调音量、点恢复播放后鼠标移出，不再被误判成"用户主动暂停" —— 见 [docs/patches/pause-misjudge.md](docs/patches/pause-misjudge.md)
+4. **启动 jQuery 策略修复**：优先使用页面自带的 jQuery，不再注入 CDN 版顶掉页面插件 —— 见 [docs/patches/jquery-bootstrap.md](docs/patches/jquery-bootstrap.md)
 
 解决什么问题：
 
@@ -92,7 +92,7 @@ app.getLogs();                    // 直接返回日志文本，可手动复制
 app.getDiagnostics();             // 返回结构化诊断对象，不落盘
 ```
 
-报告包含：脚本版本与运行时长、当前步骤、视频状态（播放/暂停、进度、就绪状态、错误码）、iframe 结构（是否跨域、里面有没有 video）、**选择器命中数表**（标 `[0]` 的通常就是页面改版后失配的位置）、课程目录解析结果、完整配置、LLM 状态、捕获到的未处理错误，以及最多 2000 条日志。详细说明见 [docs/诊断导出说明.md](docs/诊断导出说明.md)。
+报告包含：脚本版本与运行时长、当前步骤、视频状态（播放/暂停、进度、就绪状态、错误码）、iframe 结构（是否跨域、里面有没有 video）、**选择器命中数表**（标 `[0]` 的通常就是页面改版后失配的位置）、课程目录解析结果、完整配置、LLM 状态、捕获到的未处理错误，以及最多 2000 条日志。详细说明见 [docs/patches/diagnostics.md](docs/patches/diagnostics.md)。
 
 报告生成与下载全部在本地完成（Blob + `<a download>`），不发任何网络请求；页面地址与视频地址都会自动去掉 query 参数，避免把临时票据带进报告。
 
@@ -108,7 +108,7 @@ node scripts/build-userscript.mjs
 
 想继续改这个脚本（人或 AI 助手）请先读这两份：
 
-- [docs/架构与维护指南.md](docs/架构与维护指南.md) —— **启动与运行期的完整时序**、**状态字段速查表**（谁写、谁读）、"用户意图判定"这块最容易改错的地方、**7 条红线**、调试手册（症状 → 先看哪个字段）、测试怎么跑与怎么写新用例、发版流程、上游 F1–F16 修复索引。
+- [docs/architecture.md](docs/architecture.md) —— **启动与运行期的完整时序**、**状态字段速查表**（谁写、谁读）、"用户意图判定"这块最容易改错的地方、**7 条红线**、调试手册（症状 → 先看哪个字段）、测试怎么跑与怎么写新用例、发版流程、上游 F1–F16 修复索引。
 - [AGENTS.md](AGENTS.md) —— 给 AI / 自动化助手的精简入口：硬性规则、改完必须跑的命令清单、版本号规则、记录要求、不要做的事。
 
 快速上手：改 `v3_optimized.js`（唯一源码）→ `node scripts/build-userscript.mjs` 重新生成油猴版 → `node --check` 两个文件 → 跑测试。
@@ -117,18 +117,53 @@ node scripts/build-userscript.mjs
 
 ```
 .
+├── README.md                    # 项目说明（入口）
+├── CHANGELOG.md                 # 版本变更记录
+├── CONTRIBUTING.md              # 贡献指南
+├── CODE_OF_CONDUCT.md           # 行为准则
+├── SECURITY.md                  # 安全策略（凭据/隐私边界）
 ├── AGENTS.md                    # 给 AI / 自动化助手的工作约定
+├── .gitignore / .gitattributes / .editorconfig   # 仓库与编辑器规范
 ├── v3_optimized.js              # 唯一源码（可直接粘进控制台运行）
-├── v3_optimized.user.js         # Tampermonkey 油猴版（构建产物）
+├── v3_optimized.user.js         # Tampermonkey 油猴版（构建产物，故意提交）
+├── .github/
+│   ├── workflows/ci.yml         # 语法 + 同步 + 测试 + 红线静态扫描
+│   ├── ISSUE_TEMPLATE/          # Bug 反馈模板（引导附诊断报告）
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── scripts/
 │   └── build-userscript.mjs     # 由源码生成油猴版
+├── tests/
+│   ├── test-startup.mjs         # jQuery 获取策略、版本号解析（34 项）
+│   ├── test-pause-fix.mjs       # 用户意图判定矩阵（33 项）
+│   ├── test-diag.mjs            # 诊断导出（50 项）
+│   └── verify-sync.mjs          # 校验「油猴版 = 元数据 + 源码」
 └── docs/
-    ├── 架构与维护指南.md          # 架构、状态字段、红线、调试与发版流程
-    ├── 拖动补丁说明.md           # 面板拖动补丁的改动清单、验证方式与回滚方法
-    ├── 诊断导出说明.md           # 诊断导出的内容、用法与隐私说明
-    ├── 暂停误判修复.md           # F17/F19：暂停被误判为用户意图的根因与修复
-    └── 启动jQuery修复.md         # F18：jQuery 获取策略与页面插件冲突的修复
+    ├── index.md                 # 文档索引
+    ├── architecture.md          # 架构、状态字段速查、红线、调试手册、发版流程
+    └── patches/
+        ├── gui-drag.md          # 面板拖动
+        ├── diagnostics.md       # 诊断导出
+        ├── pause-misjudge.md    # F17/F19：暂停被误判为用户意图
+        └── jquery-bootstrap.md  # F18：启动 jQuery 策略
 ```
+
+## 结构说明（与通用项目模板的差异）
+
+本项目是**单文件浏览器脚本**，不是 Node / Web 应用。参考通用模板时，以下部分**刻意不采用**，原因写在表里：
+
+| 模板中的位置 | 采用 | 原因 |
+| --- | --- | --- |
+| `src/` | ❌ | 源码本身就是唯一交付物（可直接粘进浏览器控制台）。拆成多模块会破坏"单一源码 + 粘贴即用"的约定，也不利于与上游保持同步。 |
+| `dist/` 或 `build/` | ❌ | 构建产物 `v3_optimized.user.js` **故意提交入库**，用户才能直接从仓库安装油猴脚本。 |
+| `Dockerfile` / `docker-compose.yml` | ❌ | 没有服务端组件，脚本全部跑在浏览器里。 |
+| `.env.example` / `config/` | ❌ | 没有环境变量与配置文件；所有可调项都在脚本内 `app.configs`（见「默认配置」）。 |
+| `Makefile` | ❌ | 常用命令只有三条（构建、检查、测试），README 与 CI 里已明确列出；作者环境为 Windows，没有 `make`。 |
+| `examples/` | ❌ | 用法示例就是下面「使用」一节；控制台片段放在各补丁文档里。 |
+| `assets/` | ❌ | 目前没有图片资源（后续若加面板截图会新建这个目录）。 |
+| `LICENSE` | ⏳ 待定 | 本项目是**派生作品**，许可证需要与上游一致或取得原作者许可后才能确定，因此没有擅自添加。 |
+| `tests/` | ✅ | 已纳入仓库，并由 CI 自动执行。 |
+| `.github/` | ✅ | CI 工作流 + issue / PR 模板。 |
+| `CHANGELOG` / `CONTRIBUTING` / `SECURITY` / `CODE_OF_CONDUCT` / `.gitignore` / `.gitattributes` / `.editorconfig` | ✅ | 均已补齐。 |
 
 ## 默认配置
 

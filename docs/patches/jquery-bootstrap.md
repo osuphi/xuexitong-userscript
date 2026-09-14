@@ -1,6 +1,6 @@
 # 启动 jQuery 获取策略修复（F18）
 
-修复「脚本往页面里补注入 jQuery，顶掉页面自己的实例，导致页面插件报 `$(...).getNiceScroll is not a function`」。返回 [README](../README.md)。
+修复「脚本往页面里补注入 jQuery，顶掉页面自己的实例，导致页面插件报 `$(...).getNiceScroll is not a function`」。返回 [README](../../README.md)。
 
 ## 现象
 

@@ -1,0 +1,23 @@
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node（本项目没有依赖，正常不会出现）
+node_modules/
+npm-debug.log*
+
+# 临时文件与本地实验
+tmp/
+work/
+*.tmp
+*.log
+
+# 注意：v3_optimized.user.js 是构建产物，但**故意提交**入库，
+# 这样用户可以直接从仓库安装油猴脚本。不要把它加进忽略列表。

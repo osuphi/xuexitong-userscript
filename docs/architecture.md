@@ -2,7 +2,7 @@
 
 给要接手改这个脚本的人或 AI 助手。读完你应该能做到：**知道该改哪个函数、知道哪些线不能踩、知道改完怎么验证**。
 
-配套阅读：[README](../README.md)（项目说明）、[拖动补丁说明](拖动补丁说明.md)、[诊断导出说明](诊断导出说明.md)、[暂停误判修复](暂停误判修复.md)、[启动jQuery修复](启动jQuery修复.md)。
+配套阅读：[README](../README.md)（项目说明）、[拖动补丁说明](patches/gui-drag.md)、[诊断导出说明](patches/diagnostics.md)、[暂停误判修复](patches/pause-misjudge.md)、[启动jQuery修复](patches/jquery-bootstrap.md)。
 
 ---
 
@@ -18,12 +18,12 @@
 
 | 编号 | 内容 | 文档 |
 | --- | --- | --- |
-| — | 右上角 GUI 面板支持拖动 | [拖动补丁说明](拖动补丁说明.md) |
-| — | 一键导出诊断报告（日志/状态/选择器命中） | [诊断导出说明](诊断导出说明.md) |
-| F17 | 调音量不再被误判成"用户主动暂停" | [暂停误判修复](暂停误判修复.md) |
+| — | 右上角 GUI 面板支持拖动 | [拖动补丁说明](patches/gui-drag.md) |
+| — | 一键导出诊断报告（日志/状态/选择器命中） | [诊断导出说明](patches/diagnostics.md) |
+| F17 | 调音量不再被误判成"用户主动暂停" | [暂停误判修复](patches/pause-misjudge.md) |
 | F19 | 点恢复播放后鼠标移出，不再被误判成"用户主动暂停" | 同上 |
-| F18 | 启动时优先使用页面自带的 jQuery，不再注入 CDN 版顶掉页面插件 | [启动jQuery修复](启动jQuery修复.md) |
-| — | 诊断日志按内容去重、控制台提示限量（防刷屏） | [诊断导出说明](诊断导出说明.md) |
+| F18 | 启动时优先使用页面自带的 jQuery，不再注入 CDN 版顶掉页面插件 | [启动jQuery修复](patches/jquery-bootstrap.md) |
+| — | 诊断日志按内容去重、控制台提示限量（防刷屏） | [诊断导出说明](patches/diagnostics.md) |
 
 **基线校验**：改动前的原始 `v3_optimized.js` git blob 为 `cd5d54b4aae93d53f35074326fe20dedb0be0903`，油猴版为 `4447e621e4e32119d6cbbf748b8239dcb1fc6093`。用本仓库的构建脚本可以逐字节复现后者 —— 改动后跑一遍 `scripts/build-userscript.mjs` 即可确认基线没被误伤。
 
@@ -117,7 +117,7 @@ _isUserPauseIntent(now)     用户在 userPauseWindowMs(2500ms) 内操作过 且
 _userPaused = true（不再抢播）     按页面行为处理：拦截或自动恢复
 ```
 
-**改这块之前请先读 [暂停误判修复](暂停误判修复.md)** —— F17（调音量）和 F19（点恢复播放）都是"把用户的操作误当成暂停意图"造成的，两个 bug 的日志现象几乎一样，根因却不同。
+**改这块之前请先读 [暂停误判修复](patches/pause-misjudge.md)** —— F17（调音量）和 F19（点恢复播放）都是"把用户的操作误当成暂停意图"造成的，两个 bug 的日志现象几乎一样，根因却不同。
 
 改完必须让 `test-pause-fix.mjs` 的判定矩阵全绿（6 个场景）。加新场景比改阈值更划算。
 

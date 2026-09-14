@@ -1,0 +1,16 @@
+# 统一换行符：仓库内一律 LF（作者与用户都可能用 Windows，避免 CRLF 噪声）
+* text=auto eol=lf
+
+# 构建产物标记：GitHub 会折叠显示、不计入语言统计
+v3_optimized.user.js linguist-generated=true
+
+# 文档不计入语言统计
+docs/** linguist-documentation=true
+*.md linguist-documentation=true
+
+# 二进制资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
