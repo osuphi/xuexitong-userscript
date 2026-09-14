@@ -131,6 +131,10 @@
                 // F9（V3.5）：GUI 可视化面板。纯本地 DOM，不产生任何额外网络请求。
                 guiEnabled: true,
                 guiMaxLogLines: 60,
+                // 诊断导出补丁：日志缓冲与导出开关。与面板开关独立——
+                // 关掉 GUI 也会继续收集日志，否则出问题时"没有东西可导"。
+                diagEnabled: true,
+                diagLogMaxLines: 2000,
                 // F10（V3.5）：LLM 互动题应答。默认关闭；开启后才会访问 llmEndpoint。
                 // 密钥只存内存：GUI 面板「设置 Key」或控制台 app.setLlmKey(...)。
                 llmEnabled: false,
@@ -182,6 +186,11 @@
             _guiDragHandlers: null,
             _guiPos: null,
             _guiLogs: [],
+            // 诊断导出补丁：与面板无关的日志缓冲、未处理错误记录
+            _diagLogs: [],
+            _diagStartedAt: 0,
+            _diagErrors: [],
+            _diagErrorHandlers: null,
             _guiCollapsed: false,
             _guiLastRefreshTs: 0,
             // F10（V3.5）：LLM 应答状态（密钥仅存内存，绝不落盘）。
@@ -259,6 +268,7 @@
                 this._bindStepNavigation();
                 this._startInteractionWatcher();
                 this._bindVisibilityRecovery();
+                this._diagInit();
                 this._guiInit();
                 this.play();
             },
@@ -1921,6 +1931,7 @@
                     this._guiLogs = [];
                     if (logEl) logEl.textContent = '';
                 });
+                addBtn('导出诊断', '导出日志与运行状态为文件，便于排查问题（等同 app.exportDiagnostics()）', () => this.exportDiagnostics('txt'));
                 bodyWrap.appendChild(statusEl);
                 bodyWrap.appendChild(logEl);
                 bodyWrap.appendChild(btnRow);
@@ -1958,7 +1969,8 @@
                     panel.style.right = 'auto';
                     header.style.cursor = 'grabbing';
                     try { header.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-                    e.preventDefault();
+                    // 刻意不调用 e.preventDefault()：上游把 preventDefault/stopPropagation 列为禁止写法
+                    // （#26 #54 的教训），拖动靠标题栏上的 user-select:none + touch-action:none 达成同样效果。
                 };
                 const onDragMove = (e) => {
                     if (!dragging || e.pointerId !== dragPointerId) return;
@@ -1968,7 +1980,6 @@
                     panel.style.left = pos.left + 'px';
                     panel.style.top = pos.top + 'px';
                     this._guiPos = { left: pos.left, top: pos.top, width: w, height: h };
-                    e.preventDefault();
                 };
                 const onDragUp = (e) => {
                     if (!dragging) return;
@@ -2021,6 +2032,282 @@
                     if (hook && hook.app === this) hook.app = null;
                 } catch (e) { /* ignore */ }
             },
+            // ===================== 诊断导出补丁（本地修改，非上游代码） =====================
+            // 目的：把"出问题时到底发生了什么"变成一份可以直接附到 issue 的文件。
+            // 原则：全部本地完成（Blob + <a download>），不发任何网络请求、不写 localStorage。
+            _diagInit() {
+                if (!this.configs.diagEnabled) return;
+                this._diagStartedAt = Date.now(); // 重新 run() 只重置计时，已收集的日志保留
+                // 关键：控制台镜像与 GUI 解耦 —— 即使关掉面板也照样收集日志
+                this._guiHookConsole();
+                if (this._diagErrorHandlers) return;
+                const onError = (ev) => {
+                    // 资源加载失败（img/script）没有 message/error，跳过，避免噪声淹没真正的异常
+                    if (!ev || (!ev.message && !ev.error)) return;
+                    const detail = ev.error && ev.error.stack ? ev.error.stack : (ev.message || '');
+                    this._diagRecordError('window.onerror', detail, ev.filename || '', ev.lineno || 0, ev.colno || 0);
+                };
+                const onRejection = (ev) => {
+                    const r = ev && ev.reason;
+                    const detail = r && r.stack ? r.stack : (r && r.message ? r.message : String(r));
+                    this._diagRecordError('unhandledrejection', detail);
+                };
+                window.addEventListener('error', onError);
+                window.addEventListener('unhandledrejection', onRejection);
+                this._diagErrorHandlers = { onError: onError, onRejection: onRejection };
+            },
+            _diagLog(level, text) {
+                try {
+                    if (!text) return;
+                    const d = new Date();
+                    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+                    const stamp = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+                        + '.' + String(d.getMilliseconds() + 1000).slice(1);
+                    this._diagLogs.push('[' + stamp + '][' + String(level || 'log') + '] ' + text);
+                    const max = Math.max(50, Number(this.configs.diagLogMaxLines) || 2000);
+                    if (this._diagLogs.length > max) this._diagLogs.splice(0, this._diagLogs.length - max);
+                } catch (e) { /* 诊断记录绝不影响主流程 */ }
+            },
+            _diagRecordError(source, detail, file, line, col) {
+                try {
+                    this._diagErrors.push({
+                        at: new Date().toISOString(),
+                        source: source,
+                        detail: String(detail || '').slice(0, 1200),
+                        file: String(file || ''),
+                        line: Number(line) || 0,
+                        col: Number(col) || 0,
+                    });
+                    if (this._diagErrors.length > 50) this._diagErrors.splice(0, this._diagErrors.length - 50);
+                    console.warn('[诊断] 捕获到未处理错误（' + source + '）：' + String(detail || '').split('\n')[0]);
+                } catch (e) { /* ignore */ }
+            },
+            getLogs() {
+                return this._diagLogs.join('\n');
+            },
+            _diagSafeUrl(u) {
+                try {
+                    const p = new URL(String(u || ''), location.href);
+                    // 只保留 origin+path，丢掉 querystring，避免把播放地址里的临时票据带进报告
+                    return p.origin + p.pathname;
+                } catch (e) { return String(u || '').split('?')[0]; }
+            },
+            _diagSelectorProbe() {
+                const probes = [
+                    ['课程目录 #coursetree', '#coursetree'],
+                    ['目录小节 .posCatalog_select', '.posCatalog_select'],
+                    ['当前高亮 .posCatalog_active', '.posCatalog_active'],
+                    ['收起态父节点 .firstLayer', '.firstLayer'],
+                    ['步骤页签 .prev_white', '.prev_white'],
+                    ['当前步骤标题 .prev_title', '.prev_title'],
+                    ['下一步 #prevNextFocusNext', '#prevNextFocusNext'],
+                    ['下一步 #right1', '#right1'],
+                    ['下一步 .nextChapter', '.nextChapter'],
+                    ['互动题 .answerQuestion', '.answerQuestion'],
+                    ['互动题 .Zy_TItle', '.Zy_TItle'],
+                    ['互动题 .videoInteraction', '.videoInteraction'],
+                    ['面板 #xt-gui-panel', '#xt-gui-panel'],
+                ];
+                const out = {};
+                for (const item of probes) {
+                    try { out[item[0]] = document.querySelectorAll(item[1]).length; } catch (e) { out[item[0]] = -1; }
+                }
+                try {
+                    for (const sel of this._videoSelectors()) {
+                        out['video 选择器 ' + sel] = document.querySelectorAll(sel).length;
+                    }
+                } catch (e) { /* ignore */ }
+                return out;
+            },
+            _diagFrameSummary() {
+                const frames = [];
+                const walk = (doc, depth) => {
+                    if (!doc || depth > 3) return;
+                    let list = [];
+                    try { list = Array.from(doc.querySelectorAll('iframe, frame')); } catch (e) { return; }
+                    for (const frame of list) {
+                        let innerDoc = null;
+                        let access = 'not-loaded';
+                        try {
+                            innerDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+                            access = innerDoc ? 'ok' : 'cross-origin-or-not-loaded';
+                        } catch (e) { access = 'cross-origin'; }
+                        let hasVideo = false;
+                        if (innerDoc) { try { hasVideo = !!innerDoc.querySelector('video'); } catch (e) { hasVideo = false; } }
+                        frames.push({
+                            depth: depth,
+                            src: this._diagSafeUrl(frame.getAttribute('src') || frame.src || ''),
+                            access: access,
+                            hasVideo: hasVideo,
+                        });
+                        if (innerDoc) walk(innerDoc, depth + 1);
+                    }
+                };
+                try { walk(document, 1); } catch (e) { /* ignore */ }
+                return frames;
+            },
+            getDiagnostics() {
+                const copy = (v) => { try { return JSON.parse(JSON.stringify(v)); } catch (e) { return null; } };
+                let video = null;
+                try { video = this._getVideoEl(); } catch (e) { video = null; }
+                const videoInfo = video ? {
+                    found: true,
+                    src: this._diagSafeUrl(video.currentSrc || video.src || ''),
+                    isConnected: video.isConnected !== false,
+                    inIframe: (() => { try { return video.ownerDocument !== document; } catch (e) { return null; } })(),
+                    paused: !!video.paused,
+                    ended: !!video.ended,
+                    muted: !!video.muted,
+                    playbackRate: Number(video.playbackRate),
+                    currentTime: Number(video.currentTime),
+                    duration: Number.isFinite(video.duration) ? Number(video.duration) : null,
+                    readyState: Number(video.readyState),
+                    networkState: Number(video.networkState),
+                    errorCode: video.error ? Number(video.error.code) : null,
+                } : { found: false };
+                let stepTitle = '';
+                try { stepTitle = this._currentStepTitle(); } catch (e) { stepTitle = ''; }
+                return {
+                    version: this.version,
+                    generatedAt: new Date().toISOString(),
+                    elapsedMs: this._diagStartedAt ? (Date.now() - this._diagStartedAt) : null,
+                    page: {
+                        url: this._diagSafeUrl(location.href),
+                        title: document.title,
+                        userAgent: navigator.userAgent,
+                        viewport: (window.innerWidth || 0) + 'x' + (window.innerHeight || 0),
+                        visibility: document.visibilityState,
+                        jQuery: typeof window.jQuery !== 'undefined' ? String((window.jQuery.fn && window.jQuery.fn.jquery) || 'yes') : 'missing',
+                    },
+                    step: stepTitle,
+                    state: {
+                        isPlaying: !!this._isPlaying,
+                        userPaused: !!this._userPaused,
+                        interactionBlocked: !!this._interactionBlocked,
+                        nextUnitPending: !!this._nextUnitPending,
+                        tryTimes: Number(this._tryTimes) || 0,
+                        workBusy: !!this._workBusy,
+                        videoTaskIndex: Number(this._currentVideoTaskIndex) || 0,
+                        videoTaskCount: Number(this._videoTaskCount) || 0,
+                        videoTaskAllComplete: !!this._videoTaskAllComplete,
+                        pendingTimers: (this._timers && this._timers.size) || 0,
+                        checkIntervalActive: !!this._checkInterval,
+                        interactionWatcherActive: !!this._interactionWatcher,
+                        guiCollapsed: !!this._guiCollapsed,
+                        guiPos: copy(this._guiPos),
+                    },
+                    configs: copy(this.configs),
+                    catalog: copy(this._cellData),
+                    video: videoInfo,
+                    frames: this._diagFrameSummary(),
+                    selectors: this._diagSelectorProbe(),
+                    llm: {
+                        enabled: !!this.configs.llmEnabled,
+                        keyConfigured: !!this._llmApiKey,
+                        inFlight: !!this._llmInFlight,
+                        answersThisSession: Number(this._llmAnswersThisSession) || 0,
+                        lastAnswer: copy(this._llmLastAnswer),
+                    },
+                    errors: copy(this._diagErrors) || [],
+                    logsTail: this._diagLogs.slice(-200),
+                };
+            },
+            _diagBuildTextReport(diag, fullLog) {
+                const lines = [];
+                const add = (s) => lines.push(s === undefined ? '' : String(s));
+                add('学习通脚本诊断报告');
+                add('============================================================');
+                add('脚本版本   : ' + diag.version);
+                add('生成时间   : ' + diag.generatedAt);
+                add('已运行     : ' + Math.round((diag.elapsedMs || 0) / 1000) + ' 秒');
+                add('页面(去参数): ' + diag.page.url);
+                add('页面标题   : ' + diag.page.title);
+                add('当前步骤   : ' + (diag.step || '(未识别)'));
+                add('视口/可见性: ' + diag.page.viewport + ' / ' + diag.page.visibility);
+                add('jQuery     : ' + diag.page.jQuery);
+                add('UA         : ' + diag.page.userAgent);
+                add('');
+                add('【运行状态】');
+                Object.keys(diag.state || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.state[k])));
+                add('');
+                add('【视频】');
+                Object.keys(diag.video || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.video[k])));
+                add('');
+                add('【frame 结构】（共 ' + diag.frames.length + ' 个）');
+                if (!diag.frames.length) add('  (页面里没有 iframe)');
+                diag.frames.forEach((f, i) => add('  #' + (i + 1) + ' depth=' + f.depth + ' access=' + f.access + ' hasVideo=' + f.hasVideo + ' src=' + f.src));
+                add('');
+                add('【选择器命中数】标 [0] 的通常是页面改版后失配的位置');
+                Object.keys(diag.selectors || {}).forEach((k) => add('  ' + (diag.selectors[k] === 0 ? '[0] ' : '    ') + k + ' = ' + diag.selectors[k]));
+                add('');
+                add('【课程目录解析】');
+                Object.keys(diag.catalog || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.catalog[k])));
+                add('');
+                add('【配置】');
+                Object.keys(diag.configs || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.configs[k])));
+                add('');
+                add('【LLM】');
+                Object.keys(diag.llm || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.llm[k])));
+                add('');
+                add('【捕获到的未处理错误】（' + diag.errors.length + ' 条）');
+                if (!diag.errors.length) add('  (无)');
+                diag.errors.forEach((e) => {
+                    add('  - [' + e.at + '] ' + e.source + ' ' + e.file + ':' + e.line + ':' + e.col);
+                    add('      ' + e.detail);
+                });
+                add('');
+                add('【完整日志】（共 ' + this._diagLogs.length + ' 条，上限 ' + this.configs.diagLogMaxLines + '）');
+                add(fullLog || '(空)');
+                return lines.join('\n');
+            },
+            exportDiagnostics(format) {
+                const kind = String(format || 'txt').toLowerCase() === 'json' ? 'json' : 'txt';
+                const d = new Date();
+                const pad = (n) => (n < 10 ? '0' + n : '' + n);
+                const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+                    + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+                let payload = '';
+                let filename = '';
+                try {
+                    const diag = this.getDiagnostics();
+                    if (kind === 'json') {
+                        payload = JSON.stringify(diag, null, 2);
+                        filename = 'xuexitong-diag-' + stamp + '.json';
+                    } else {
+                        payload = this._diagBuildTextReport(diag, this.getLogs());
+                        filename = 'xuexitong-diag-' + stamp + '.txt';
+                    }
+                } catch (e) {
+                    console.error('[诊断] 生成报告失败：' + (e && e.message ? e.message : e));
+                    return '';
+                }
+                this._diagDownload(filename, payload);
+                return payload;
+            },
+            _diagDownload(filename, text) {
+                try {
+                    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.rel = 'noopener';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    // 统一走 _schedule，保持"所有定时器都登记在账本里"的既有约定
+                    this._schedule(() => {
+                        try { document.body.removeChild(a); } catch (e) { /* ignore */ }
+                        try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+                    }, 1000);
+                    console.log('[诊断] 已导出 ' + filename + '（' + text.length + ' 字符）。若浏览器没有触发下载，可用 app.getLogs() 手动复制。');
+                    return true;
+                } catch (e) {
+                    console.error('[诊断] 导出失败：' + (e && e.message ? e.message : e) + '；可改用 app.getLogs() 手动复制日志。');
+                    return false;
+                }
+            },
+            // =========================== 诊断导出补丁结束 ===========================
             _guiHookConsole() {
                 const hookKey = '__xuexitongPlayerGuiConsoleHook';
                 let hook = window[hookKey];
@@ -2071,9 +2358,11 @@
                 return parts.join(' ').replace(/\s+/g, ' ').trim();
             },
             _guiLog(level, text) {
-                if (!this.configs.guiEnabled) return;
+                if (!text) return;
+                // 诊断导出补丁：先落到诊断缓冲（与面板开关无关），再决定要不要渲染到面板
+                if (this.configs.diagEnabled) this._diagLog(level, text);
+                if (!this.configs.guiEnabled || !this._guiLogEl) return;
                 try {
-                    if (!text) return;
                     const d = new Date();
                     const pad = (n) => (n < 10 ? '0' + n : '' + n);
                     const stamp = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
@@ -2988,6 +3277,14 @@
                 this._consecutiveNoVideoAdvances = 0;
                 this._resumeAttemptsThisUnit = 0;
                 this._resumeCapLogged = false;
+                // 诊断导出补丁：摘掉未处理错误监听（控制台镜像由 _guiDestroy 置空 hook.app 停止收集）
+                if (this._diagErrorHandlers) {
+                    try {
+                        window.removeEventListener('error', this._diagErrorHandlers.onError);
+                        window.removeEventListener('unhandledrejection', this._diagErrorHandlers.onRejection);
+                    } catch (e) { /* ignore */ }
+                    this._diagErrorHandlers = null;
+                }
                 console.log('%c脚本已停止（destroy）：定时器、视频事件与页面监听均已清理。', 'color:#607D8B');
             },
         };
