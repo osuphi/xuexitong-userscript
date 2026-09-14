@@ -7,7 +7,7 @@ const source = readFileSync(resolve(root, 'v3_optimized.js'), 'utf8').replace(/^
 const metadata = `// ==UserScript==
 // @name         学习通自动刷课脚本 V3.6
 // @namespace    local.codex.xuexitong
-// @version      3.6.0.5
+// @version      3.6.0.6
 // @description  自动播放、自动切换下一小节；V3.6 内嵌章节测验自动作答（默认关闭，绝不跳过）；V3.5 GUI 面板与互动题应答；沿用 V3.4 导航/播放/风控修复（详见 README）
 // @author       Codex
 // @match        *://mooc1.chaoxing.com/mycourse/studentstudy*
