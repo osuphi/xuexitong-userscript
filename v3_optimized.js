@@ -22,6 +22,26 @@
     const VERSION = 'V3.6';
     const APP_KEY = '__xuexitongPlayerV3';
     const BOOT_TIMER_KEY = '__xuexitongPlayerV3BootTimer';
+    // 诊断用：记录本脚本是否往页面里补注入过 jQuery（仅当页面原本没有时才会注入）。
+    // 万一页面插件（如 nicescroll）报 "xxx is not a function"，这个标记能立刻区分
+    // 「页面自己缺插件」还是「被本脚本补注入的 jQuery 顶掉了页面实例」。
+    let jqueryInjectedByScript = false;
+    // 诊断用：启动瞬间分别记录「沙箱窗口看得到什么」和「页面窗口里有什么」。
+    // 用来判断 getNiceScroll 那类页面插件报错，到底是不是被本脚本补注入的 jQuery 引起的。
+    const startupProbe = {
+        sandboxJQuery: typeof window.jQuery,
+        sandboxDollar: typeof window.$,
+        pageJQuery: 'n/a',
+        pageDollar: 'n/a',
+        pageJQueryVersion: '',
+    };
+    try {
+        if (typeof unsafeWindow !== 'undefined' && unsafeWindow) {
+            startupProbe.pageJQuery = typeof unsafeWindow.jQuery;
+            startupProbe.pageDollar = typeof unsafeWindow.$;
+            startupProbe.pageJQueryVersion = (unsafeWindow.jQuery && unsafeWindow.jQuery.fn && unsafeWindow.jQuery.fn.jquery) || '';
+        }
+    } catch (e) { /* 页面上下文没有 unsafeWindow，忽略 */ }
     const previousApp = window[APP_KEY];
     if (previousApp && typeof previousApp.destroy === 'function') {
         previousApp.destroy();
@@ -31,14 +51,57 @@
         window[BOOT_TIMER_KEY] = null;
     }
     // F7（#33 #47）：启动阶段必须给出可操作提示，不能「粘完没反应」。
-    // 说明：页面本身依赖 jQuery；脚本只在页面没有 jQuery 时补一个 CDN <script>（V3.3 既有行为，未新增依赖）。
-    if (typeof window.jQuery === 'undefined') {
+    // F18（本地修复）：原判断只看沙箱里的 window.jQuery。油猴在 @grant 下会把脚本放进沙箱，
+    // 实测沙箱看不到页面自带的 jQuery（页面明明是 v1.7.2，沙箱里却是 undefined），于是脚本会往
+    // 页面补注入一份 CDN jQuery，把页面的 window.$ / window.jQuery 顶掉，页面自己的插件
+    // （如 nicescroll）随之失效 —— 表现为满屏 "$(...).getNiceScroll is not a function"。
+    // 现在改为：① 先看页面窗口；② 页面有可用的 jQuery 就直接用，绝不注入、不覆盖任何全局；
+    // ③ 两个窗口都没有（或版本太老，没有 .on/.off）才注入，且注入后立刻把页面全局还原。
+    let $ = null;
+    let jquerySource = '未知';
+    const pageWin = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+    const isUsableJQuery = (candidate) => {
+        try {
+            return !!(candidate && typeof candidate === 'function' && candidate.fn
+                && typeof candidate.fn.on === 'function' && typeof candidate.fn.off === 'function');
+        } catch (e) { return false; }
+    };
+    const pickJQuery = () => {
+        const candidates = [window.jQuery, window.$, pageWin.jQuery, pageWin.$];
+        for (const candidate of candidates) {
+            if (isUsableJQuery(candidate)) return candidate;
+        }
+        return null;
+    };
+    const beginScript = () => {
+        const version = ($ && $.fn && $.fn.jquery) || '未知';
+        console.log('jQuery 来源：' + jquerySource + '，版本 ' + version);
+        waitForCoursePage();
+    };
+    $ = pickJQuery();
+    if ($) {
+        // 页面自带：不注入、不覆盖
+        jquerySource = '页面自带';
+        beginScript();
+    } else {
+        const savedDollar = pageWin.$;
+        const savedJQuery = pageWin.jQuery;
         const script = document.createElement('script');
         script.src = 'https://code.jquery.com/jquery-3.6.0.min.js';
         script.type = 'text/javascript';
         script.onload = function () {
-            console.log('jQuery loaded.');
-            waitForCoursePage();
+            $ = pickJQuery();
+            // 还原页面原有全局：页面自己的代码与插件继续用它原来的 jQuery（通常是 undefined）
+            try {
+                pageWin.$ = savedDollar;
+                pageWin.jQuery = savedJQuery;
+            } catch (e) { /* ignore */ }
+            if (!$) {
+                console.error('%c脚本启动失败：CDN jQuery 已加载但取不到实例。', 'color:#F44336;font-weight:bold');
+                return;
+            }
+            jquerySource = '本脚本注入的 CDN 版';
+            beginScript();
         };
         script.onerror = function () {
             // F7（#12 #16 #17 #33）：CDN 被拦截是最常见的「没效果」原因，这里必须说清楚怎么办。
@@ -46,9 +109,8 @@
             console.log('处理方法：1) 改用油猴版 v3_optimized.user.js；2) 或在页面控制台手动引入 jQuery 后重新粘贴本脚本；'
                 + '3) 检查广告拦截插件是否拦截了 code.jquery.com。');
         };
+        jqueryInjectedByScript = true;
         document.head.appendChild(script);
-    } else {
-        waitForCoursePage();
     }
     function waitForCoursePage() {
         let attempts = 0;
@@ -106,6 +168,12 @@
                 playTimeoutMs: 8000,
                 resumeMaxAttemptsPerUnit: 5,
                 userPauseWindowMs: 2500,
+                // F19（本地修复）：判定"这次暂停算不算用户意图"的两个辅助参数。
+                //   userIntentMatchMs —— play/pause 事件发生在这么多毫秒内，才认为它由刚才那次交互触发；
+                //   userResumeGraceMs —— 用户刚点亮播放后，这段时间内的暂停一律归因于页面
+                //                        （实测：点恢复播放后 0.3 秒鼠标移出，会被误判成用户暂停）。
+                userIntentMatchMs: 800,
+                userResumeGraceMs: 3000,
                 autoAdvanceNoVideo: false,
                 maxConsecutiveNoVideoAdvances: 3,
                 videoFrameMaxDepth: 4,
@@ -135,6 +203,11 @@
                 // 关掉 GUI 也会继续收集日志，否则出问题时"没有东西可导"。
                 diagEnabled: true,
                 diagLogMaxLines: 2000,
+                // 是否收集页面未处理错误；以及最多对前几条「不同的」错误做控制台提示。
+                // 页面自身经常高频抛同一个错（实测：缺 nicescroll 时满屏 getNiceScroll），
+                // 所以必须去重 + 限制提示条数，否则面板和日志会被冲爆。
+                diagCaptureErrors: true,
+                diagErrorEchoMax: 5,
                 // F10（V3.5）：LLM 互动题应答。默认关闭；开启后才会访问 llmEndpoint。
                 // 密钥只存内存：GUI 面板「设置 Key」或控制台 app.setLlmKey(...)。
                 llmEnabled: false,
@@ -170,6 +243,12 @@
             _resumeCapLogged: false,
             _userPaused: false,
             _lastUserInteractionTs: 0,
+            // F19（本地修复）：最近一次「用户交互触发的播放」时间戳，用于区分随后的暂停归谁
+            _lastUserPlayTs: 0,
+            // F17（本地修复）：音量/静音操作单独计时，不计入"暂停意图"
+            _lastVolumeInteractionTs: 0,
+            // F17（本地修复）：每个"用户暂停"周期只提示一次的节流时间戳
+            _userPausedNoticeTs: 0,
             _userInteractionDoc: null,
             _userInteractionHandler: null,
             _interactionBlocked: false,
@@ -191,6 +270,7 @@
             _diagStartedAt: 0,
             _diagErrors: [],
             _diagErrorHandlers: null,
+            _diagErrorEchoCount: 0,
             _guiCollapsed: false,
             _guiLastRefreshTs: 0,
             // F10（V3.5）：LLM 应答状态（密钥仅存内存，绝不落盘）。
@@ -674,10 +754,16 @@
                     }
                     if (video.paused && this._isPlaying) {
                         this._progressStreakStart = 0;
-                        if (this._isProgressStalled(now)) {
+                        if (this._userPaused) {
+                            // F17（本地修复）：已判定为用户主动暂停 —— 不抢播，也不再每秒刷日志。
+                            // 原实现在这里每秒打印一次"尝试恢复播放"，但 _tryResumePlayback 会因为
+                            // _userPaused 立刻返回，等于一边刷屏一边什么都没做（实测 60 行/分钟）。
+                            this._noteUserPausedStall();
+                        } else if (this._isProgressStalled(now)) {
                             const cap = Math.max(1, Number(this.configs.resumeMaxAttemptsPerUnit) || 5);
                             if (this._resumeAttemptsThisUnit < cap) {
-                                console.log('%c检测到视频暂停且进度停滞，按有界策略尝试恢复播放...', 'color:#FF5722');
+                                // F17（本地修复）：是否真的发起恢复由 _tryResumePlayback 决定（冷却与停滞
+                                // 判定都在它内部），它成功发起时会自己打印"触发视频保活恢复"，这里不再重复打印。
                                 this._tryResumePlayback('paused');
                             }
                             // 达到上限后不再每秒重复打印（上限提示已由 _tryResumePlayback 打印一次）
@@ -700,6 +786,16 @@
                 } catch (e) {
                     console.error('视频状态检查失败:', e);
                 }
+            },
+            _noteUserPausedStall() {
+                // F17（本地修复）：处于"用户主动暂停"状态时，每分钟最多提醒一次，
+                // 让面板能说明"为什么不恢复"，又不至于被 1 秒一次的轮询刷成日志洪水。
+                try {
+                    const now = Date.now();
+                    if (this._userPausedNoticeTs && now - this._userPausedNoticeTs < 60000) return;
+                    this._userPausedNoticeTs = now;
+                    console.log('%c当前为「用户主动暂停」状态：脚本不会自动恢复。点播放器播放，或执行 app.resumeAutoPlay()。', 'color:#607D8B');
+                } catch (e) { /* ignore */ }
             },
             _tryTimes: 0,
             _stepAdvanceTimes: 0,
@@ -1583,8 +1679,11 @@
                 const origPause = el.pause.bind(el);
                 el.pause = function () {
                     try {
-                        const recentUser = Date.now() - (self._lastUserInteractionTs || 0) < 1500;
-                        if (self._isPlaying && !self._userPaused && !recentUser) {
+                        const now = Date.now();
+                        const recentUser = now - (self._lastUserInteractionTs || 0) < 1500;
+                        // F19（本地修复）：用户刚点开播（这次 play 由那次交互触发）时，随后的暂停
+                        // 一律按页面防挂机处理并拦截 —— 否则"点恢复播放→马上移出鼠标"会被放行成用户暂停。
+                        if (self._isPlaying && !self._userPaused && (!recentUser || self._wasJustUserResumed(now))) {
                             self._pauseGuardBlocked++;
                             if (self._pauseGuardBlocked <= 3) {
                                 console.log('%c[防挂机] 已拦截平台防挂机暂停（鼠标移出页面触发，第 ' + self._pauseGuardBlocked + ' 次）', 'color:#4CAF50');
@@ -1625,7 +1724,14 @@
             _bindUserInteractionWatch(frameDoc) {
                 if (!frameDoc || this._userInteractionDoc === frameDoc) return;
                 this._unbindUserInteractionWatch();
-                const handler = () => {
+                const handler = (ev) => {
+                    // F17（本地修复）：音量/静音操作不算「暂停意图」。实测：调完音量后把鼠标移出
+                    // 浏览器，平台防挂机的 pause() 会被误判成用户主动暂停（_userPaused=true，
+                    // 之后再也不会自动恢复）；同时这 1.5 秒内 pauseGuard 还会把它放行。
+                    if (this._isVolumeControlEvent(ev)) {
+                        this._lastVolumeInteractionTs = Date.now();
+                        return;
+                    }
                     this._lastUserInteractionTs = Date.now();
                 };
                 frameDoc.addEventListener('pointerdown', handler, true);
@@ -1641,6 +1747,47 @@
                 this._userInteractionDoc.removeEventListener('keydown', this._userInteractionHandler, true);
                 this._userInteractionDoc = null;
                 this._userInteractionHandler = null;
+            },
+            _wasJustUserResumed(now) {
+                // F19（本地修复）：判断"用户刚刚亲手把视频点开播"。
+                // 条件：最近一次交互触发了 play（两者相差不超过 userIntentMatchMs），
+                //       且这次 play 还在 userResumeGraceMs 的宽限期内。
+                try {
+                    const tInt = Number(this._lastUserInteractionTs) || 0;
+                    const tPlay = Number(this._lastUserPlayTs) || 0;
+                    if (!tInt || !tPlay) return false;
+                    const match = Math.max(0, Number(this.configs.userIntentMatchMs) || 800);
+                    const grace = Math.max(0, Number(this.configs.userResumeGraceMs) || 3000);
+                    if (tPlay < tInt - match) return false;   // 这次 play 不是那次交互触发的（用户后来又操作过）
+                    if (now - tPlay > grace) return false;    // 早就播起来了，不算"刚点开"
+                    return true;
+                } catch (e) { return false; }
+            },
+            _isUserPauseIntent(now) {
+                // F19（本地修复）：判断"这次暂停能不能算用户主动暂停"。
+                // 规则：① 用户必须在 userPauseWindowMs 内操作过播放器；② 且他刚才不是"点开播"——
+                // 用户刚按过播放，不可能同时又想暂停，那种暂停是页面防挂机/风控干的。
+                try {
+                    const tInt = Number(this._lastUserInteractionTs) || 0;
+                    if (!tInt) return false;
+                    if (now - tInt > (Number(this.configs.userPauseWindowMs) || 2500)) return false;
+                    if (this._wasJustUserResumed(now)) return false;
+                    return true;
+                } catch (e) { return false; }
+            },
+            _isVolumeControlEvent(ev) {
+                // F17（本地修复）：只用于区分「音量/静音」与「播放/暂停意图」，
+                // 不拦截任何事件、不调用 preventDefault（遵守上游"不劫持事件"的约定）。
+                try {
+                    let node = ev && ev.target;
+                    for (let i = 0; node && node.nodeType === 1 && i < 4; i++, node = node.parentElement) {
+                        const tag = String(node.tagName || '').toLowerCase();
+                        if (tag === 'input' && String(node.type || '').toLowerCase() === 'range') return true;
+                        const hint = String(node.id || '') + ' ' + String(typeof node.className === 'string' ? node.className : '');
+                        if (/volume|mute|音量|静音/i.test(hint)) return true;
+                    }
+                } catch (e) { /* ignore */ }
+                return false;
             },
             _detachVideoEvents() {
                 if (this._eventVideoEl && this._boundVideoHandlers) {
@@ -1704,16 +1851,24 @@
                 this._stepSwitchPending = false;
                 // F4（#32 #55）：重新开始播放即视为暂停问题已解决，清掉用户暂停标记。
                 this._userPaused = false;
+                this._userPausedNoticeTs = 0;
+                // F19（本地修复）：如果这次播放是紧接着用户交互发生的，记下时间戳，
+                // 供 _wasJustUserResumed() 判断"紧随其后的暂停不该算用户意图"。
+                const nowPlay = Date.now();
+                if (this._lastUserInteractionTs
+                    && nowPlay - this._lastUserInteractionTs <= (Number(this.configs.userIntentMatchMs) || 800)) {
+                    this._lastUserPlayTs = nowPlay;
+                }
                 this._guardLastTime = Number((this._getVideoEl() || {}).currentTime || 0);
                 this._guardLastWallTs = Date.now();
                 this._cancelDelayedNextUnit('视频重新开始播放');
             },
             _handleVideoPause(e) {
                 const now = Date.now();
-                const sinceInteraction = this._lastUserInteractionTs ? now - this._lastUserInteractionTs : Infinity;
                 // F4（#26 #32 #54 #55）：只有「用户刚在播放器里操作过」才认定为用户主动暂停。
                 // 判定后脚本停止抢播，避免无差别 play() 造成的风控/验证码（#54）与假播放状态（#55）。
-                if (sinceInteraction <= this.configs.userPauseWindowMs) {
+                // F19（本地修复）：判定收敛到 _isUserPauseIntent()，并排除"用户刚点开播"的情况。
+                if (this._isUserPauseIntent(now)) {
                     this._userPaused = true;
                     console.warn('%c检测到用户主动暂停：脚本不再自动恢复播放（#26 #32 #55）。', 'color:#FF9800');
                     console.log('处理方法：需要恢复自动保活时，请点击播放按钮或执行 app.resumeAutoPlay()。');
@@ -2038,8 +2193,10 @@
             _diagInit() {
                 if (!this.configs.diagEnabled) return;
                 this._diagStartedAt = Date.now(); // 重新 run() 只重置计时，已收集的日志保留
+                this._diagErrorEchoCount = 0;      // 但"控制台提示额度"按每次运行重新给
                 // 关键：控制台镜像与 GUI 解耦 —— 即使关掉面板也照样收集日志
                 this._guiHookConsole();
+                if (!this.configs.diagCaptureErrors) return;
                 if (this._diagErrorHandlers) return;
                 const onError = (ev) => {
                     // 资源加载失败（img/script）没有 message/error，跳过，避免噪声淹没真正的异常
@@ -2070,16 +2227,37 @@
             },
             _diagRecordError(source, detail, file, line, col) {
                 try {
+                    const message = String(detail || '').slice(0, 1200);
+                    // 按「来源 + 错误内容」去重：同一条错误只记一行并累加次数。
+                    // 页面自己刷错时，这样既不会丢信息，也不会淹没真正的日志。
+                    const key = source + '|' + message;
+                    const dup = this._diagErrors.filter((e) => e.key === key)[0];
+                    if (dup) {
+                        dup.count = (Number(dup.count) || 1) + 1;
+                        dup.lastAt = new Date().toISOString();
+                        return;
+                    }
                     this._diagErrors.push({
+                        key: key,
                         at: new Date().toISOString(),
+                        lastAt: '',
                         source: source,
-                        detail: String(detail || '').slice(0, 1200),
+                        detail: message,
                         file: String(file || ''),
                         line: Number(line) || 0,
                         col: Number(col) || 0,
+                        count: 1,
                     });
                     if (this._diagErrors.length > 50) this._diagErrors.splice(0, this._diagErrors.length - 50);
-                    console.warn('[诊断] 捕获到未处理错误（' + source + '）：' + String(detail || '').split('\n')[0]);
+                    // 只对前几条不同错误做一次控制台提示；之后的同类/新增错误只进报告，不再刷屏
+                    const echoMax = Math.max(0, Number(this.configs.diagErrorEchoMax) || 5);
+                    if (this._diagErrorEchoCount < echoMax) {
+                        this._diagErrorEchoCount++;
+                        console.warn('[诊断] 记录到未处理错误（' + source + '）：' + message.split('\n')[0]
+                            + (this._diagErrorEchoCount >= echoMax
+                                ? '；已达提示上限，后续错误只写入诊断报告、不再刷屏'
+                                : '（同类错误会自动合并计数）'));
+                    }
                 } catch (e) { /* ignore */ }
             },
             getLogs() {
@@ -2178,7 +2356,10 @@
                         viewport: (window.innerWidth || 0) + 'x' + (window.innerHeight || 0),
                         visibility: document.visibilityState,
                         jQuery: typeof window.jQuery !== 'undefined' ? String((window.jQuery.fn && window.jQuery.fn.jquery) || 'yes') : 'missing',
+                        jQueryInjectedByScript: jqueryInjectedByScript,
+                        jQuerySource: jquerySource,
                     },
+                    startup: copy(startupProbe),
                     step: stepTitle,
                     state: {
                         isPlaying: !!this._isPlaying,
@@ -2195,6 +2376,9 @@
                         interactionWatcherActive: !!this._interactionWatcher,
                         guiCollapsed: !!this._guiCollapsed,
                         guiPos: copy(this._guiPos),
+                        lastUserInteractionMsAgo: this._lastUserInteractionTs ? (Date.now() - this._lastUserInteractionTs) : null,
+                        lastUserPlayMsAgo: this._lastUserPlayTs ? (Date.now() - this._lastUserPlayTs) : null,
+                        userPauseIntentNow: this._isUserPauseIntent(Date.now()),
                     },
                     configs: copy(this.configs),
                     catalog: copy(this._cellData),
@@ -2225,6 +2409,11 @@
                 add('当前步骤   : ' + (diag.step || '(未识别)'));
                 add('视口/可见性: ' + diag.page.viewport + ' / ' + diag.page.visibility);
                 add('jQuery     : ' + diag.page.jQuery);
+                add('jQuery 注入: ' + (diag.page.jQueryInjectedByScript ? '是（页面原本没有 jQuery，由本脚本补注入）' : '否（用的是页面自带）'));
+                add('jQuery 来源: ' + (diag.page.jQuerySource || '未知'));
+                const su = diag.startup || {};
+                add('启动时探测 : 沙箱 jQuery=' + (su.sandboxJQuery || '?') + ' / 页面 jQuery=' + (su.pageJQuery || '?')
+                    + (su.pageJQueryVersion ? '（v' + su.pageJQueryVersion + '）' : '') + ' / 页面 $=' + (su.pageDollar || '?'));
                 add('UA         : ' + diag.page.userAgent);
                 add('');
                 add('【运行状态】');
@@ -2249,11 +2438,13 @@
                 add('【LLM】');
                 Object.keys(diag.llm || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.llm[k])));
                 add('');
-                add('【捕获到的未处理错误】（' + diag.errors.length + ' 条）');
+                const errTotal = (diag.errors || []).reduce((sum, e) => sum + (Number(e.count) || 1), 0);
+                add('【捕获到的未处理错误】（' + diag.errors.length + ' 种 / 共 ' + errTotal + ' 次）');
                 if (!diag.errors.length) add('  (无)');
                 diag.errors.forEach((e) => {
-                    add('  - [' + e.at + '] ' + e.source + ' ' + e.file + ':' + e.line + ':' + e.col);
+                    add('  - [' + e.at + '] ×' + (Number(e.count) || 1) + ' ' + e.source + ' ' + e.file + ':' + e.line + ':' + e.col);
                     add('      ' + e.detail);
+                    if (e.lastAt) add('      最后出现: ' + e.lastAt);
                 });
                 add('');
                 add('【完整日志】（共 ' + this._diagLogs.length + ' 条，上限 ' + this.configs.diagLogMaxLines + '）');
@@ -2388,7 +2579,8 @@
                     const lines = [];
                     lines.push('状态: ' + (this._isPlaying ? '播放中' : '空闲')
                         + ' ｜ 步骤: ' + (this._currentStepTitle() || '未知')
-                        + ' ｜ 互动题: ' + (this._interactionBlocked ? '暂停（等人工）' : '正常'));
+                        + ' ｜ 互动题: ' + (this._interactionBlocked ? '暂停（等人工）' : '正常')
+                        + ' ｜ 用户暂停: ' + (this._userPaused ? '是（不自动恢复）' : '否'));
                     lines.push('进度: 章节 ' + ((Number(cell.currentCellIndex) || 0) + 1) + '/' + (chapters || '?')
                         + ' ｜ 视频任务点 ' + (videos ? ((Number(this._currentVideoTaskIndex) || 0) + 1) + '/' + videos : '?'));
                     lines.push('LLM: ' + (this.configs.llmEnabled ? '开' : '关')
