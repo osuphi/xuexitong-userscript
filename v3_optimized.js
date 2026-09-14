@@ -20,6 +20,17 @@
     //   * 默认配置下全脚本零外部网络请求；仅当显式开启 LLM 后才会访问 llmEndpoint；
     //   * LLM 请求只发送题干与选项文本，不发送 cookie、账号或页面地址等凭据信息。
     const VERSION = 'V3.6';
+    // 运行期能拿到"完整构建版本"（油猴元数据里的 @version，例如 3.6.0.6），
+    // 控制台直贴版没有 GM_info，就回退到上面的源码常量。
+    // 这样面板标题与诊断报告都能显示具体构建号，便于对着报告排查"你装的是哪一版"。
+    const readBuildVersion = () => {
+        try {
+            if (typeof GM_info === 'undefined' || !GM_info) return '';
+            const value = GM_info.script && GM_info.script.version;
+            return value ? String(value) : '';
+        } catch (e) { return ''; }
+    };
+    const BUILD_VERSION = readBuildVersion();
     const APP_KEY = '__xuexitongPlayerV3';
     const BOOT_TIMER_KEY = '__xuexitongPlayerV3BootTimer';
     // 诊断用：记录本脚本是否往页面里补注入过 jQuery（仅当页面原本没有时才会注入）。
@@ -146,6 +157,7 @@
     function initializePlayer() {
         const app = {
             version: VERSION,
+            buildVersion: BUILD_VERSION,
             configs: {
                 // 默认改为 1.0 原速（平台约束，不是脚本缺陷）：学习通 reportTimeInterval 每 60 秒向 multimedia/log
                 // 上报一次观看时间，部分课程要求观看时长达到 100%，1.5 倍速既容易学时不达标（#28 #31），
@@ -309,7 +321,7 @@
                 return this._cellData;
             },
             run() {
-                console.log(`%c=== 学习通自动刷课脚本 ${VERSION} 启动 ===`, 'color:#4CAF50;font-size:16px;font-weight:bold');
+                console.log(`%c=== 学习通自动刷课脚本 ${this.version}${this.buildVersion ? ' / 构建 ' + this.buildVersion : ''} 启动 ===`, 'color:#4CAF50;font-size:16px;font-weight:bold');
                 // F4（#54 #55）：每次 run() 先把上一轮的定时器彻底清掉，避免残留定时器叠加日志/重复点击。
                 this._clearTimers();
                 this._clearCheckInterval();
@@ -2032,7 +2044,8 @@
                 header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:#1f2937;'
                     + 'cursor:move;user-select:none;-webkit-user-select:none;touch-action:none;';
                 const title = document.createElement('span');
-                title.textContent = '学习通脚本监控 ' + this.version;
+                // 有完整构建号就显示它（油猴版），否则回退到上游常量
+                title.textContent = '学习通脚本监控 ' + (this.buildVersion || this.version);
                 title.style.cssText = 'font-weight:bold;color:#93c5fd;';
                 const collapseBtn = document.createElement('button');
                 collapseBtn.type = 'button';
@@ -2347,6 +2360,7 @@
                 try { stepTitle = this._currentStepTitle(); } catch (e) { stepTitle = ''; }
                 return {
                     version: this.version,
+                    buildVersion: this.buildVersion || '',
                     generatedAt: new Date().toISOString(),
                     elapsedMs: this._diagStartedAt ? (Date.now() - this._diagStartedAt) : null,
                     page: {
@@ -2401,7 +2415,7 @@
                 const add = (s) => lines.push(s === undefined ? '' : String(s));
                 add('学习通脚本诊断报告');
                 add('============================================================');
-                add('脚本版本   : ' + diag.version);
+                add('脚本版本   : ' + diag.version + (diag.buildVersion ? '（构建 ' + diag.buildVersion + '，油猴元数据 @version）' : '（源码常量，控制台直贴版没有 GM_info）'));
                 add('生成时间   : ' + diag.generatedAt);
                 add('已运行     : ' + Math.round((diag.elapsedMs || 0) / 1000) + ' 秒');
                 add('页面(去参数): ' + diag.page.url);
