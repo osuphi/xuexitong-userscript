@@ -1,10 +1,13 @@
-# 学习通自动刷课脚本 V3.6（GUI 面板可拖动）
+# 学习通自动刷课脚本 V3.6（可拖动面板 + 诊断导出）
 
-学习通（超星）课程视频自动播放与自动切换的浏览器脚本，右上角带一个可拖动的可视化监控面板。
+学习通（超星）课程视频自动播放与自动切换的浏览器脚本，右上角带一个可拖动的可视化监控面板，并支持一键导出含运行状态的诊断报告。
 
 ## 简介
 
-本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上加了一处本地补丁：**右上角的 GUI 监控面板支持拖动**。补丁细节见 [docs/拖动补丁说明.md](docs/拖动补丁说明.md)。
+本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上加了两处本地补丁：
+
+1. **右上角的 GUI 监控面板支持拖动** —— 见 [docs/拖动补丁说明.md](docs/拖动补丁说明.md)
+2. **一键导出诊断报告**（日志 + 运行状态 + 选择器命中情况）—— 见 [docs/诊断导出说明.md](docs/诊断导出说明.md)
 
 解决什么问题：
 
@@ -25,6 +28,7 @@
 - 视频元素自动发现：多层 iframe、跨域 frame 容错、节点失效后缓存重查
 - 任务点弹窗处理：点"去学习/去完成"回到未完成任务点，而不是硬点"下一节"
 - 右上角 GUI 监控面板：**可拖动（本项目补丁）**、可折叠、镜像控制台日志、提供快捷按钮
+- **导出诊断报告（本项目补丁）**：一键把日志、运行状态、视频与 iframe 结构、选择器命中表导出成文件，便于排查问题
 - 可选能力（均默认关闭）：文档任务点自动翻阅、互动题大模型应答、内嵌章节测验/作业自动作答
 
 ## 技术栈
@@ -63,7 +67,7 @@ cd xuexitong-userscript
 
 - **拖动**：按住顶部标题栏拖到任意位置（位置仅在本次页面会话内有效，刷新后回到右上角）
 - **折叠**：点标题栏右侧的 `—` / `+`
-- **按钮**：暂停/继续、下一节、LLM 开/关、自动提交 开/关、设置 Key、清空日志
+- **按钮**：暂停/继续、下一节、LLM 开/关、自动提交 开/关、设置 Key、清空日志、导出诊断
 
 页面控制台里可以拿到 `app` 对象：
 
@@ -74,6 +78,21 @@ app.resumeAutoPlay();             // 取消"用户主动暂停"状态，恢复�
 app.destroy();                    // 停止并清理定时器与事件监听
 app.configs.playbackRate = 2;     // 改倍速后再执行 app.run()
 ```
+
+### 排查问题：导出诊断报告
+
+出问题时点面板上的 **「导出诊断」**，或者按 `F12` 打开控制台执行：
+
+```js
+app.exportDiagnostics();          // 导出可读的 txt 报告（含完整日志）
+app.exportDiagnostics('json');    // 导出结构化 json，便于附加到 issue
+app.getLogs();                    // 直接返回日志文本，可手动复制
+app.getDiagnostics();             // 返回结构化诊断对象，不落盘
+```
+
+报告包含：脚本版本与运行时长、当前步骤、视频状态（播放/暂停、进度、就绪状态、错误码）、iframe 结构（是否跨域、里面有没有 video）、**选择器命中数表**（标 `[0]` 的通常就是页面改版后失配的位置）、课程目录解析结果、完整配置、LLM 状态、捕获到的未处理错误，以及最多 2000 条日志。详细说明见 [docs/诊断导出说明.md](docs/诊断导出说明.md)。
+
+报告生成与下载全部在本地完成（Blob + `<a download>`），不发任何网络请求；页面地址与视频地址都会自动去掉 query 参数，避免把临时票据带进报告。
 
 ## 构建
 
@@ -92,7 +111,8 @@ node scripts/build-userscript.mjs
 ├── scripts/
 │   └── build-userscript.mjs     # 由源码生成油猴版
 └── docs/
-    └── 拖动补丁说明.md           # 本项目补丁的改动清单、验证方式与回滚方法
+    ├── 拖动补丁说明.md           # 面板拖动补丁的改动清单、验证方式与回滚方法
+    └── 诊断导出说明.md           # 诊断导出的内容、用法与隐私说明
 ```
 
 ## 默认配置
@@ -110,6 +130,8 @@ node scripts/build-userscript.mjs
 | `llmEmbeddedWork` | `false` | 开启后会填答案并走平台原生提交流程 |
 | `docTaskScroll` | `false` | 文档类任务点（PDF/PPT）自动翻阅 |
 | `autoAdvanceNoVideo` | `false` | 无视频节点时是否自动前进 |
+| `diagEnabled` | `true` | 收集日志与运行状态用于导出（与面板开关独立） |
+| `diagLogMaxLines` | `2000` | 诊断日志缓冲上限（最小 50 条） |
 
 ## 已知限制
 
