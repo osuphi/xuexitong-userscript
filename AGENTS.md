@@ -2,6 +2,8 @@
 
 本文件是给 AI 助手（以及任何自动化改代码的工具）的入口。**动手前请先读 [`docs/architecture.md`](docs/architecture.md)**，它包含架构、状态字段速查表与改动流程；本文件只列最关键的约定。
 
+本机环境与产品决策背景见 [`docs/ai-handoff.md`](docs/ai-handoff.md)（只给 AI 看）。
+
 ## 这个仓库是什么
 
 本仓库在 V3.6 基础上叠加了若干本地补丁（面板拖动、诊断导出、F17–F20 修复）；出处见 README「来源与致谢」。
