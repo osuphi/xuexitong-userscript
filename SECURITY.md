@@ -24,9 +24,9 @@
 
 ## 报告安全问题
 
-本仓库是**私有仓库**。如果发现安全相关问题（例如：意外发起网络请求、注入行为影响页面其它功能），请：
 
-1. 优先通过仓库 Issue 反馈（附上诊断报告与复现步骤）；
+1. 优先通过[仓库 Issue](https://github.com/osuphi/xuexitong-userscript/issues) 反馈（附上诊断报告与复现步骤）；
+   涉及敏感细节时，也可以用 GitHub 的 "Report a vulnerability" 私下提交；
 2. 内容敏感时不要公开贴细节，直接联系仓库所有者。
 
 修复会记录在 `CHANGELOG.md`。

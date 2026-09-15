@@ -52,7 +52,14 @@ git clone https://github.com/osuphi/xuexitong-userscript.git
 cd xuexitong-userscript
 ```
 
-> 本仓库目前是私有仓库，`clone` 需要登录凭据。本脚本没有 npm 依赖，**不需要执行 `npm install`**。
+
+仓库是公开的，因此也有更省事的方式 —— 直接在浏览器里打开这个链接，油猴会弹出安装界面：
+
+```
+https://raw.githubusercontent.com/osuphi/xuexitong-userscript/main/v3_optimized.user.js
+```
+
+或者用油猴的「实用工具 → 从 URL 安装」粘贴上面的地址。手动安装：
 
 安装脚本：
 
@@ -143,23 +150,6 @@ node scripts/build-userscript.mjs
         └── jquery-bootstrap.md  # F18：启动 jQuery 策略
 ```
 
-## 结构说明（与通用项目模板的差异）
-
-本项目是**单文件浏览器脚本**，不是 Node / Web 应用。参考通用模板时，以下部分**刻意不采用**，原因写在表里：
-
-| 模板中的位置 | 采用 | 原因 |
-| --- | --- | --- |
-| `src/` | ❌ | 源码本身就是唯一交付物（可直接粘进浏览器控制台）。拆成多模块会破坏"单一源码 + 粘贴即用"的约定，也不利于与上游保持同步。 |
-| `dist/` 或 `build/` | ❌ | 构建产物 `v3_optimized.user.js` **故意提交入库**，用户才能直接从仓库安装油猴脚本。 |
-| `Dockerfile` / `docker-compose.yml` | ❌ | 没有服务端组件，脚本全部跑在浏览器里。 |
-| `.env.example` / `config/` | ❌ | 没有环境变量与配置文件；所有可调项都在脚本内 `app.configs`（见「默认配置」）。 |
-| `Makefile` | ❌ | 常用命令只有三条（构建、检查、测试），README 与 CI 里已明确列出；作者环境为 Windows，没有 `make`。 |
-| `examples/` | ❌ | 用法示例就是下面「使用」一节；控制台片段放在各补丁文档里。 |
-| `assets/` | ❌ | 目前没有图片资源（后续若加面板截图会新建这个目录）。 |
-| `LICENSE` | ⏳ 待定 | 本项目是**派生作品**，许可证需要与上游一致或取得原作者许可后才能确定，因此没有擅自添加。 |
-| `tests/` | ✅ | 已纳入仓库，并由 CI 自动执行。 |
-| `.github/` | ✅ | CI 工作流 + issue / PR 模板。 |
-
 ## 默认配置
 
 | 配置项 | 默认值 | 说明 |
@@ -184,7 +174,6 @@ node scripts/build-userscript.mjs
 - **频繁抢播可能触发风控**：默认配置是"无论谁暂停都自动恢复"，恢复动作有冷却与每小节次数上限（可用 `resumeMaxAttemptsPerUnit: 0` 解开上限，但会让抢播更频繁）。
 - **缺少完成标记的无视频节点无法自动判断**，脚本会安全停止，需要手动确认后再执行 `app.nextUnit()`。
 - **页面改版会导致选择器失配**，届时日志会给出可操作提示，按提示刷新或手动点选小节即可。
-- **私有仓库无法用 URL 直接安装油猴脚本**，请使用仓库内的本地文件安装。
 - **面板位置不持久化**，刷新页面后回到右上角（与脚本"不写 localStorage"的约定一致）。
 
 ## 免责声明
