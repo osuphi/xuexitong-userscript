@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | — | GUI 监控面板可拖动 | [patches/gui-drag.md](patches/gui-drag.md) |
 | — | 一键导出诊断报告（含日志去重、启动探测等字段） | [patches/diagnostics.md](patches/diagnostics.md) |
-| F17 / F19 | 暂停被误判为"用户主动暂停"（调音量、点恢复播放） | [patches/pause-misjudge.md](patches/pause-misjudge.md) |
+| F17 / F19 / F20 | 暂停被误判为"用户主动暂停"（调音量、点恢复播放）；F20 起默认"始终自动恢复" | [patches/pause-misjudge.md](patches/pause-misjudge.md) |
 | F18 | 启动 jQuery 策略：不再注入 CDN 版顶掉页面插件 | [patches/jquery-bootstrap.md](patches/jquery-bootstrap.md) |
 
 上游历史修复（F1–F16）的索引见 [architecture.md](architecture.md) 第 12 节。
@@ -28,7 +28,7 @@
 | 文件 | 覆盖 |
 | --- | --- |
 | [`tests/test-startup.mjs`](../tests/test-startup.mjs) | jQuery 获取策略、版本号解析（共 34 项） |
-| [`tests/test-pause-fix.mjs`](../tests/test-pause-fix.mjs) | 音量控件识别、**用户意图判定矩阵**（共 33 项） |
+| [`tests/test-pause-fix.mjs`](../tests/test-pause-fix.mjs) | 音量控件识别、**用户意图判定矩阵**、恢复策略（共 45 项） |
 | [`tests/test-diag.mjs`](../tests/test-diag.mjs) | 诊断：缓冲裁剪、错误去重、URL 脱敏、报告结构（共 50 项） |
 
 另有 [`tests/verify-sync.mjs`](../tests/verify-sync.mjs) 校验「油猴版 = 元数据 + 源码」。

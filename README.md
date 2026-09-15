@@ -4,7 +4,7 @@
 
 ## 简介
 
-本项目基于 [ywdddddddddd/xuexitongScript](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [chaolucky18/xuexitongScript](https://github.com/chaolucky18/xuexitongScript)），在其之上叠加了四处本地补丁（均已在实机验证）：
+本仓库在 V3.6 基础上叠加了四处本地补丁（均已在实机验证），完整出处见文末「来源与致谢」：
 
 1. **右上角的 GUI 监控面板支持拖动** —— 见 [docs/patches/gui-drag.md](docs/patches/gui-drag.md)
 2. **一键导出诊断报告**（日志 + 运行状态 + 选择器命中情况）—— 见 [docs/patches/diagnostics.md](docs/patches/diagnostics.md)
@@ -23,7 +23,7 @@
 - 自动播放课程视频，并按配置倍速播放（默认 1.0 原速）
 - 自动切换：同小节的下一个视频任务点 → 下一小节 → 下一章
 - 小节内有多个视频任务点时逐个播完，不会只播第一个
-- 异常暂停/卡顿自动恢复：只在"进度确实停滞"时才动手，带冷却与每小节次数上限
+- 异常暂停/卡顿自动恢复：只在"进度确实停滞"时才动手，带冷却与每小节次数上限；**默认连用户点的暂停也会自动恢复**（`respectUserPause`，见「默认配置」）
 - 页面切到后台时保持播放（后台保活）
 - 拦截平台"鼠标移出页面自动暂停"的防挂机暂停
 - 片尾停滞保护：即将播完且平台已标记任务点完成时直接推进
@@ -31,13 +31,12 @@
 - 任务点弹窗处理：点"去学习/去完成"回到未完成任务点，而不是硬点"下一节"
 - 右上角 GUI 监控面板：**可拖动（本项目补丁）**、可折叠、镜像控制台日志、提供快捷按钮
 - **导出诊断报告（本项目补丁）**：一键把日志、运行状态、视频与 iframe 结构、选择器命中表导出成文件，便于排查问题
-- 可选能力（均默认关闭）：文档任务点自动翻阅、互动题大模型应答、内嵌章节测验/作业自动作答
+- **不含任何自动作答功能**：互动题弹窗只检测并提示人工完成；每节课末尾的章节测验/作业直接跳过
 
 ## 技术栈
 
 - 原生 JavaScript —— 浏览器内运行的 IIFE，无框架、无打包器、无运行时依赖
 - jQuery 3.6 —— 优先使用课程页面自带的；页面没有时才回退到 CDN
-- Tampermonkey —— 油猴版通过 `GM_xmlhttpRequest` 发起可选的 LLM 请求
 - Node.js —— **仅**用于把唯一源码拼装成油猴版，见 [scripts/build-userscript.mjs](scripts/build-userscript.mjs)
 
 ## 环境要求
@@ -69,7 +68,6 @@ cd xuexitong-userscript
 
 - **拖动**：按住顶部标题栏拖到任意位置（位置仅在本次页面会话内有效，刷新后回到右上角）
 - **折叠**：点标题栏右侧的 `—` / `+`
-- **按钮**：暂停/继续、下一节、LLM 开/关、自动提交 开/关、设置 Key、清空日志、导出诊断
 
 页面控制台里可以拿到 `app` 对象：
 
@@ -92,7 +90,6 @@ app.getLogs();                    // 直接返回日志文本，可手动复制
 app.getDiagnostics();             // 返回结构化诊断对象，不落盘
 ```
 
-报告包含：脚本版本与运行时长、当前步骤、视频状态（播放/暂停、进度、就绪状态、错误码）、iframe 结构（是否跨域、里面有没有 video）、**选择器命中数表**（标 `[0]` 的通常就是页面改版后失配的位置）、课程目录解析结果、完整配置、LLM 状态、捕获到的未处理错误，以及最多 2000 条日志。详细说明见 [docs/patches/diagnostics.md](docs/patches/diagnostics.md)。
 
 报告生成与下载全部在本地完成（Blob + `<a download>`），不发任何网络请求；页面地址与视频地址都会自动去掉 query 参数，避免把临时票据带进报告。
 
@@ -120,7 +117,6 @@ node scripts/build-userscript.mjs
 ├── README.md                    # 项目说明（入口）
 ├── CHANGELOG.md                 # 版本变更记录
 ├── CONTRIBUTING.md              # 贡献指南
-├── CODE_OF_CONDUCT.md           # 行为准则
 ├── SECURITY.md                  # 安全策略（凭据/隐私边界）
 ├── AGENTS.md                    # 给 AI / 自动化助手的工作约定
 ├── .gitignore / .gitattributes / .editorconfig   # 仓库与编辑器规范
@@ -134,7 +130,7 @@ node scripts/build-userscript.mjs
 │   └── build-userscript.mjs     # 由源码生成油猴版
 ├── tests/
 │   ├── test-startup.mjs         # jQuery 获取策略、版本号解析（34 项）
-│   ├── test-pause-fix.mjs       # 用户意图判定矩阵（33 项）
+│   ├── test-pause-fix.mjs       # 用户意图判定矩阵 + 恢复策略（45 项）
 │   ├── test-diag.mjs            # 诊断导出（50 项）
 │   └── verify-sync.mjs          # 校验「油猴版 = 元数据 + 源码」
 └── docs/
@@ -163,7 +159,6 @@ node scripts/build-userscript.mjs
 | `LICENSE` | ⏳ 待定 | 本项目是**派生作品**，许可证需要与上游一致或取得原作者许可后才能确定，因此没有擅自添加。 |
 | `tests/` | ✅ | 已纳入仓库，并由 CI 自动执行。 |
 | `.github/` | ✅ | CI 工作流 + issue / PR 模板。 |
-| `CHANGELOG` / `CONTRIBUTING` / `SECURITY` / `CODE_OF_CONDUCT` / `.gitignore` / `.gitattributes` / `.editorconfig` | ✅ | 均已补齐。 |
 
 ## 默认配置
 
@@ -174,12 +169,10 @@ node scripts/build-userscript.mjs
 | `guiEnabled` | `true` | 右上角监控面板（纯本地 DOM，零网络请求） |
 | `pauseGuard` | `true` | 拦截无用户意图的暂停（最近 1.5 秒有操作则放行） |
 | `interactionGuard` | `true` | 检测视频内互动题弹窗并暂停自动跳转 |
-| `llmEnabled` | `false` | 互动题大模型应答，需自备密钥，密钥只存内存 |
-| `llmAutoSubmit` | `false` | 关闭时只选答案，提交留给人点 |
-| `llmChapterTest` | `false` | 章节测验只给建议、不自动点击 |
-| `llmEmbeddedWork` | `false` | 开启后会填答案并走平台原生提交流程 |
 | `docTaskScroll` | `false` | 文档类任务点（PDF/PPT）自动翻阅 |
 | `autoAdvanceNoVideo` | `false` | 无视频节点时是否自动前进 |
+| `respectUserPause` | `false` | **本仓库默认**：不把用户的暂停当最终决定，暂停后仍会自动恢复（想真正停下请关闭本脚本）；设为 `true` 回到上游"尊重用户暂停"的行为 |
+| `resumeMaxAttemptsPerUnit` | `5` | 每小节自动恢复的次数上限；**显式设为 `0` 表示不限次数** |
 | `diagEnabled` | `true` | 收集日志与运行状态用于导出（与面板开关独立） |
 | `diagLogMaxLines` | `2000` | 诊断日志缓冲上限（最小 50 条） |
 | `diagCaptureErrors` | `true` | 是否捕获页面未处理错误 |
@@ -188,7 +181,7 @@ node scripts/build-userscript.mjs
 ## 已知限制
 
 - **倍速与任务点由服务端判定**，脚本无法绕过；部分课程会忽略本地倍速或要求完整观看才计学时。
-- **频繁抢播可能触发风控**，因此自动恢复播放有冷却和每小节次数上限，达到上限后需要人工介入。
+- **频繁抢播可能触发风控**：默认配置是"无论谁暂停都自动恢复"，恢复动作有冷却与每小节次数上限（可用 `resumeMaxAttemptsPerUnit: 0` 解开上限，但会让抢播更频繁）。
 - **缺少完成标记的无视频节点无法自动判断**，脚本会安全停止，需要手动确认后再执行 `app.nextUnit()`。
 - **页面改版会导致选择器失配**，届时日志会给出可操作提示，按提示刷新或手动点选小节即可。
 - **私有仓库无法用 URL 直接安装油猴脚本**，请使用仓库内的本地文件安装。

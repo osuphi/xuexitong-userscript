@@ -4,7 +4,7 @@
 
 ## 基线
 
-- 来源：`ywdddddddddd/xuexitongScript` 默认分支 `master`（提交 `7a7a51a`）
+- 改动前基线（出处见 README「来源与致谢」）：默认分支 `master` 提交 `7a7a51a`
 - 原始源码 `v3_optimized.js` 的 git blob：`cd5d54b4aae93d53f35074326fe20dedb0be0903`（180574 字节）
 - 原始油猴版 `v3_optimized.user.js` 的 git blob：`4447e621e4e32119d6cbbf748b8239dcb1fc6093`（181257 字节）
 - 用本仓库的 `scripts/build-userscript.mjs` 重新构建，可逐字节复现上面这个油猴版 blob —— 说明基线正确，补丁只动了它该动的地方。

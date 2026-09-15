@@ -11,13 +11,12 @@
     //   F6 视频元素发现      #18 #52 #55
     //   F7 启动与文档        #4 #5 #12 #16 #17 #23 #33 #47 #50
     //   F9 GUI 可视化面板    （V3.5 新增：纯本地 DOM + 控制台镜像，默认开启，零网络请求）
-    //   F10 LLM 互动题应答   （V3.5 新增：默认关闭，需显式开启并提供密钥）
     //
     // 设计边界（V3.5 起）：
-    //   * 默认不启用任何自动答题：互动题自动应答仅当 llmEnabled=true 时生效；
-    //     章节测验默认只「受限跳过」；显式开启 llmChapterTest 后也只把建议答案显示在面板，绝不自动点击；
-    //   * 密钥只保存在内存（GUI 面板录入 / app.setLlmKey），不写入 localStorage、不落盘、不进仓库；
-    //   * 默认配置下全脚本零外部网络请求；仅当显式开启 LLM 后才会访问 llmEndpoint；
+    //   * 本仓库不含任何自动作答功能：视频内的互动题弹窗只做检测并提示人工完成；
+    //     每节课末尾的章节测验/作业一律直接跳过（保留有限次数上限，用于防止页面循环）；
+    //   * 全脚本不写 localStorage、不落盘、不外发任何凭据；
+    //   * 任何配置下都不会发起外部网络请求（唯一外链是页面缺 jQuery 时补加载的 CDN）；
     //   * LLM 请求只发送题干与选项文本，不发送 cookie、账号或页面地址等凭据信息。
     const VERSION = 'V3.6';
     // 运行期能拿到"完整构建版本"（油猴元数据里的 @version，例如 3.6.0.6），
@@ -178,7 +177,14 @@
                 guardSeekBackMaxPerUnit: 2,
                 // 播放 Promise 超时保护：媒体管线冻结时 play() 可能永不 settle
                 playTimeoutMs: 8000,
+                // F20（本地修复）：恢复播放的次数上限；**显式设为 0 表示不限次数**。
                 resumeMaxAttemptsPerUnit: 5,
+                // F20（本地修复）：是否"尊重用户主动暂停"。
+                //   false（本仓库默认）= 无论谁暂停（用户点的 / 页面防挂机 / 浏览器省电），都按有界策略自动恢复；
+                //                        需要真正停下时，把油猴里的本脚本关掉即可。
+                //   true            = 上游原行为：用户点过暂停就不再抢播
+                //                        （上游为避免无差别 play() 触发风控而选择的方式，见 #26 #32 #54 #55）。
+                respectUserPause: false,
                 userPauseWindowMs: 2500,
                 // F19（本地修复）：判定"这次暂停算不算用户意图"的两个辅助参数。
                 //   userIntentMatchMs —— play/pause 事件发生在这么多毫秒内，才认为它由刚才那次交互触发；
@@ -220,26 +226,9 @@
                 // 所以必须去重 + 限制提示条数，否则面板和日志会被冲爆。
                 diagCaptureErrors: true,
                 diagErrorEchoMax: 5,
-                // F10（V3.5）：LLM 互动题应答。默认关闭；开启后才会访问 llmEndpoint。
-                // 密钥只存内存：GUI 面板「设置 Key」或控制台 app.setLlmKey(...)。
-                llmEnabled: false,
-                llmEndpoint: 'https://opencode.ai/zen/go/v1/chat/completions',
-                llmModel: 'deepseek-flash',
                 // 实测：推理模型在 max_tokens 过小时会把配额耗在 reasoning 上导致 content 为空，必须 >= 1024。
-                llmMaxTokens: 4096, // 实测：推理 token 可达 1600+，1024 会把配额吃光导致空响应（finish_reason=length）
                 // true=请求体带 response_format:{"type":"json_object"}，约束模型只输出 JSON；自定义端点不支持时设为 false。
-                llmJsonMode: true,
-                llmTimeoutMs: 30000,
                 // 有界防循环（思路同 PR #53 的 10 次上限），超出后回退人工。
-                llmMaxAnswersPerSession: 50,
-                // false=只自动选择答案，提交按钮留给用户；true=自动选择并提交。
-                llmAutoSubmit: false,
-                // 章节测验（计入成绩）默认关闭；开启后也只把建议答案显示在面板，绝不自动点击。
-                llmChapterTest: false,
-                // F11（V3.6）：内嵌章节测验/作业（work）自动作答。默认关闭；开启后 LLM 自动填写简答题并走平台原生提交流程。
-                llmEmbeddedWork: false,
-                // 提交后任务点标记可能延迟（待批阅），窗口放宽到 90s（真机演练实证）。
-                llmWorkWaitMs: 90000,
             },
             _videoEl: null,
             _treeContainerEl: null,
@@ -285,20 +274,6 @@
             _diagErrorEchoCount: 0,
             _guiCollapsed: false,
             _guiLastRefreshTs: 0,
-            // F10（V3.5）：LLM 应答状态（密钥仅存内存，绝不落盘）。
-            _llmApiKey: '',
-            _llmSessionId: '',
-            _llmTransport: null,
-            _llmInFlight: false,
-            _llmAbort: null,
-            _llmAnswersThisSession: 0,
-            _llmLastAnswer: null,
-            _llmLastQuestionKey: '',
-            _llmWarnedNoKeyOnce: false,
-            _llmChapterSuggesting: false,
-            _llmChapterSuggestDone: false,
-            _llmChapterSuggestedCount: 0,
-            _workBusy: false,
             _docTaskBusy: false,
             // 思路移植自 PR #48 @CsuCook1e：小节内视频任务点与任务点弹窗状态
             _currentVideoTaskIndex: 0,
@@ -341,8 +316,6 @@
                 this._taskDialogCapLogged = false;
                 this._seekBackTimesThisUnit = 0;
                 this._seekBackCapLogged = false;
-                this._llmChapterSuggesting = false;
-                this._llmChapterSuggestDone = false;
                 if (this._guardProbeTimer) {
                     this._cancelTimer(this._guardProbeTimer);
                     this._guardProbeTimer = null;
@@ -369,12 +342,6 @@
                 // 脚本不会自动答题（硬性约束），也不需要在弹窗上反复点击。
                 if (this._interactionBlocked) {
                     console.warn('%c检测到视频互动答题弹窗，已暂停自动跳转（#29 #39）。请手动完成题目，脚本会在弹窗消失后自动继续。', 'color:#FF9800');
-                    return;
-                }
-                // F11（V3.6）：当前小节还有未完成的内嵌章节测验/作业时，先把作业处理完再跳转（修复「视频+作业」双任务点组合被跳过）。
-                if (this._hasUnfinishedEmbeddedWork()) {
-                    console.log('%c当前小节还有未完成的内嵌章节测验/作业，先处理作业再跳转', 'color:#FF9800');
-                    this._handleEmbeddedWorks();
                     return;
                 }
                 // F13（V3.6）：当前小节还有未完成的文档任务点（PDF/PPT/教案）时，先翻阅完再跳转。
@@ -577,6 +544,13 @@
                 if (video.paused) return elapsed >= this.configs.guardPausedGraceMs;
                 return !advanced && elapsed >= this.configs.guardNoProgressMs;
             },
+            _resumeCap() {
+                // F20（本地修复）：恢复播放的次数上限；configs.resumeMaxAttemptsPerUnit 设为 0 表示"不限次数"。
+                const cap = Number(this.configs.resumeMaxAttemptsPerUnit);
+                if (cap === 0) return Infinity;
+                if (!Number.isFinite(cap) || cap < 0) return 5; // 缺省或非法值 → 保守默认
+                return cap;
+            },
             _tryResumePlayback(reason) {
                 const now = Date.now();
                 if (now - this._guardLastResumeTs < this.configs.guardResumeCooldownMs) return false;
@@ -584,10 +558,11 @@
                 const video = this._getVideoEl();
                 if (!video || !this._isPlaying) return false;
                 if (!this._isProgressStalled(now)) return false;
-                if (this._resumeAttemptsThisUnit >= this.configs.resumeMaxAttemptsPerUnit) {
+                const resumeCap = this._resumeCap();
+                if (this._resumeAttemptsThisUnit >= resumeCap) {
                     if (!this._resumeCapLogged) {
                         this._resumeCapLogged = true;
-                        console.warn(`%c本节恢复播放次数已达上限（${this.configs.resumeMaxAttemptsPerUnit} 次），停止抢播（#32 #54 #55）。`, 'color:#FF9800');
+                        console.warn(`%c本节恢复播放次数已达上限（${Number.isFinite(resumeCap) ? resumeCap : '不限'} 次），停止抢播（#32 #54 #55）。`, 'color:#FF9800');
                         console.log('处理方法：如果视频仍然卡住，请手动点击播放或刷新页面；'
                             + '无差别抢播 pause 事件容易触发平台风控/验证码（#54），因此这里刻意限制次数。');
                     }
@@ -595,7 +570,7 @@
                 }
                 this._guardLastResumeTs = now;
                 this._resumeAttemptsThisUnit++;
-                console.log(`%c触发视频保活恢复(${reason}) ${this._resumeAttemptsThisUnit}/${this.configs.resumeMaxAttemptsPerUnit}`, 'color:#607D8B');
+                console.log(`%c触发视频保活恢复(${reason}) ${this._resumeAttemptsThisUnit}/${Number.isFinite(resumeCap) ? resumeCap : '∞'}`, 'color:#607D8B');
                 const attempt = video.play();
                 if (attempt && typeof attempt.catch === 'function') {
                     attempt.catch((e) => {
@@ -649,11 +624,12 @@
                         console.log('%c保活复检：进度已恢复，无需回拨重播', 'color:#4CAF50');
                         return;
                     }
-                    if (this._resumeAttemptsThisUnit >= this.configs.resumeMaxAttemptsPerUnit) {
+                    const resumeCap = this._resumeCap();
+                if (this._resumeAttemptsThisUnit >= resumeCap) {
                         // F4：回拨重播同样计入「每小节恢复次数」预算，避免阶梯把 play() 调用放大到上限之外。
                         if (!this._resumeCapLogged) {
                             this._resumeCapLogged = true;
-                            console.warn(`%c本节恢复/回拨次数已达上限（${this.configs.resumeMaxAttemptsPerUnit} 次），停止保活动作（#32 #54 #55）。`, 'color:#FF9800');
+                            console.warn(`%c本节恢复/回拨次数已达上限（${Number.isFinite(resumeCap) ? resumeCap : '不限'} 次），停止保活动作（#32 #54 #55）。`, 'color:#FF9800');
                         }
                         return;
                     }
@@ -772,7 +748,7 @@
                             // _userPaused 立刻返回，等于一边刷屏一边什么都没做（实测 60 行/分钟）。
                             this._noteUserPausedStall();
                         } else if (this._isProgressStalled(now)) {
-                            const cap = Math.max(1, Number(this.configs.resumeMaxAttemptsPerUnit) || 5);
+                            const cap = this._resumeCap();
                             if (this._resumeAttemptsThisUnit < cap) {
                                 // F17（本地修复）：是否真的发起恢复由 _tryResumePlayback 决定（冷却与停滞
                                 // 判定都在它内部），它成功发起时会自己打印"触发视频保活恢复"，这里不再重复打印。
@@ -839,12 +815,6 @@
                         if (this._currentStepTitle() === '视频') {
                             throw new Error('视频组件尚未加载完成');
                         }
-                        // F11（V3.6）：未完成的内嵌章节测验/作业优先处理，绝不跳过
-                        // （修复真机演练发现的「autoAdvanceNoVideo 把章节检验当未知节点跳过」问题）。
-                        if (this._hasUnfinishedEmbeddedWork()) {
-                            this._handleEmbeddedWorks();
-                            return;
-                        }
                         // F13（V3.6）：未完成的文档任务点（PDF/PPT/教案）自动翻阅（真机演练：教案节点被判「无法识别」跳过）。
                         if (this._hasUnfinishedDocTask()) {
                             this._handleDocTasks();
@@ -858,9 +828,6 @@
                             return;
                         }
                         if (this._isChapterTest()) {
-                            // F10（V3.5）：默认维持既有「受限跳过」；仅当显式开启 llmChapterTest 时改为
-                            // 在面板给出建议答案并暂停自动跳过（实验性，绝不自动点击）。
-                            if (this._maybeSuggestChapterTest()) return;
                             this._advanceChapterTest();
                             return;
                         }
@@ -1521,8 +1488,6 @@
                 this._cancelDelayedNextUnit('切换小节');
                 this._isPlaying = false;
                 this._currentVideoTaskIndex = 0;
-                this._llmChapterSuggesting = false;
-                this._llmChapterSuggestDone = false;
                 this._videoTaskCount = 0;
                 this._videoTaskAllComplete = false;
                 this._handlingVideoEnd = false;
@@ -1880,10 +1845,18 @@
                 // F4（#26 #32 #54 #55）：只有「用户刚在播放器里操作过」才认定为用户主动暂停。
                 // 判定后脚本停止抢播，避免无差别 play() 造成的风控/验证码（#54）与假播放状态（#55）。
                 // F19（本地修复）：判定收敛到 _isUserPauseIntent()，并排除"用户刚点开播"的情况。
-                if (this._isUserPauseIntent(now)) {
+                // F20（本地修复）：只有显式把 respectUserPause 设为 true 才沿用上游"尊重用户暂停"的行为；
+                // 默认 false —— 无论谁暂停都会自动恢复（想真正停下就把本脚本关掉）。
+                const userIntent = this._isUserPauseIntent(now);
+                if (userIntent && this.configs.respectUserPause === true) {
                     this._userPaused = true;
-                    console.warn('%c检测到用户主动暂停：脚本不再自动恢复播放（#26 #32 #55）。', 'color:#FF9800');
-                    console.log('处理方法：需要恢复自动保活时，请点击播放按钮或执行 app.resumeAutoPlay()。');
+                    console.warn('%c检测到用户主动暂停：按配置不再自动恢复播放（#26 #32 #55）。', 'color:#FF9800');
+                    console.log('处理方法：需要恢复自动保活时，请点击播放按钮、执行 app.resumeAutoPlay()，'
+                        + '或把 app.configs.respectUserPause 设为 false 后 app.run()。');
+                    return;
+                }
+                if (userIntent) {
+                    console.log('%c检测到用户主动暂停，但当前配置为「始终自动恢复」：稍后会继续播放（想真正停下请关闭本脚本）。', 'color:#FF9800');
                     return;
                 }
                 console.log('%c视频暂停（非用户操作），等待进度停滞判定后再按有界策略恢复...', 'color:#FF9800');
@@ -1971,10 +1944,8 @@
                 if (this._isChapterTest()) return null;
                 const found = this._findInteractionDialog(document, 0);
                 if (found) {
-                    // F10（V3.5）：仅当显式开启 LLM 且配置齐全时尝试自动选择；失败一律回退「暂停等人工」。
-                    if (!this._interactionBlocked && this._canLlmAnswer(found)) {
-                        this._answerInteractionWithLlm(found);
-                    } else if (!this._interactionBlocked) {
+                    // 命中互动题弹窗：一律暂停自动跳转并等人工完成（本仓库不含任何自动作答）。
+                    if (!this._interactionBlocked) {
                         this._blockInteractionForManual(found);
                     }
                 } else if (this._interactionBlocked) {
@@ -1992,8 +1963,6 @@
                 console.warn(`%c检测到视频互动答题弹窗（判断题/选择题），已暂停自动跳转（#29 #39）：${found.text}`, 'color:#FF9800');
                 console.log('处理方法：请手动完成该互动题。按设计脚本不会自动答题（#45 相关需求不实现），'
                     + '也不会绕过任何考核；答题并关闭弹窗后，脚本会自动恢复自动播放与跳转。');
-                console.log('提示：如需调用大模型自动选择答案，可在控制台执行 app.configs.llmEnabled = true，'
-                    + '并用 app.setLlmKey(...) 配置密钥（详见 README「GUI 面板与 LLM 应答」）。');
             },
             _startInteractionWatcher() {
                 // F5（#29 #39）：只检测、只暂停；全脚本没有任何自动答题/外部模型调用。
@@ -2084,17 +2053,6 @@
                     }
                 });
                 addBtn('下一节', '立即切换到下一小节', () => this.nextUnit());
-                addBtn('LLM 开/关', '切换 llmEnabled（默认关闭）', () => {
-                    this.configs.llmEnabled = !this.configs.llmEnabled;
-                    console.log('%c[GUI] LLM 应答已' + (this.configs.llmEnabled ? '开启' : '关闭'), 'color:#2196F3');
-                    this._guiRefreshStatus(true);
-                });
-                addBtn('自动提交 开/关', '切换 llmAutoSubmit（默认关闭：先选答案再人工提交）', () => {
-                    this.configs.llmAutoSubmit = !this.configs.llmAutoSubmit;
-                    console.log('%c[GUI] LLM 自动提交已' + (this.configs.llmAutoSubmit ? '开启' : '关闭'), 'color:#2196F3');
-                    this._guiRefreshStatus(true);
-                });
-                addBtn('设置 Key', '设置 LLM API Key（只保存在当前页面内存）', () => this._guiAskKey());
                 addBtn('清空日志', '清空面板日志', () => {
                     this._guiLogs = [];
                     if (logEl) logEl.textContent = '';
@@ -2381,7 +2339,6 @@
                         interactionBlocked: !!this._interactionBlocked,
                         nextUnitPending: !!this._nextUnitPending,
                         tryTimes: Number(this._tryTimes) || 0,
-                        workBusy: !!this._workBusy,
                         videoTaskIndex: Number(this._currentVideoTaskIndex) || 0,
                         videoTaskCount: Number(this._videoTaskCount) || 0,
                         videoTaskAllComplete: !!this._videoTaskAllComplete,
@@ -2399,13 +2356,6 @@
                     video: videoInfo,
                     frames: this._diagFrameSummary(),
                     selectors: this._diagSelectorProbe(),
-                    llm: {
-                        enabled: !!this.configs.llmEnabled,
-                        keyConfigured: !!this._llmApiKey,
-                        inFlight: !!this._llmInFlight,
-                        answersThisSession: Number(this._llmAnswersThisSession) || 0,
-                        lastAnswer: copy(this._llmLastAnswer),
-                    },
                     errors: copy(this._diagErrors) || [],
                     logsTail: this._diagLogs.slice(-200),
                 };
@@ -2449,8 +2399,6 @@
                 add('【配置】');
                 Object.keys(diag.configs || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.configs[k])));
                 add('');
-                add('【LLM】');
-                Object.keys(diag.llm || {}).forEach((k) => add('  ' + k + ' = ' + JSON.stringify(diag.llm[k])));
                 add('');
                 const errTotal = (diag.errors || []).reduce((sum, e) => sum + (Number(e.count) || 1), 0);
                 add('【捕获到的未处理错误】（' + diag.errors.length + ' 种 / 共 ' + errTotal + ' 次）');
@@ -2594,717 +2542,48 @@
                     lines.push('状态: ' + (this._isPlaying ? '播放中' : '空闲')
                         + ' ｜ 步骤: ' + (this._currentStepTitle() || '未知')
                         + ' ｜ 互动题: ' + (this._interactionBlocked ? '暂停（等人工）' : '正常')
-                        + ' ｜ 用户暂停: ' + (this._userPaused ? '是（不自动恢复）' : '否'));
+                        + ' ｜ 恢复策略: ' + (this.configs.respectUserPause === true
+                            ? (this._userPaused ? '尊重暂停（已暂停）' : '尊重暂停')
+                            : '始终自动'));
                     lines.push('进度: 章节 ' + ((Number(cell.currentCellIndex) || 0) + 1) + '/' + (chapters || '?')
                         + ' ｜ 视频任务点 ' + (videos ? ((Number(this._currentVideoTaskIndex) || 0) + 1) + '/' + videos : '?'));
-                    lines.push('LLM: ' + (this.configs.llmEnabled ? '开' : '关')
-                        + ' ｜ 密钥: ' + (this._llmApiKey ? '已配置' : '未配置')
-                        + ' ｜ 已应答: ' + this._llmAnswersThisSession + '/' + this.configs.llmMaxAnswersPerSession
-                        + ' ｜ 自动提交: ' + (this.configs.llmAutoSubmit ? '开' : '关'));
-                    if (this._llmLastAnswer) lines.push('最近答案: ' + this._llmLastAnswer.q + ' → ' + this._llmLastAnswer.a);
-                    if (this._llmChapterSuggestedCount) lines.push('章节测验建议: ' + this._llmChapterSuggestedCount + ' 题（仅提示，需人工确认）');
                     this._guiStatusEl.textContent = lines.join('\n');
                 } catch (e) { /* ignore */ }
             },
-            _guiAskKey() {
-                let value = null;
-                try {
-                    if (typeof prompt === 'function') value = prompt('请输入 LLM API Key（只保存在当前页面内存，不写入磁盘/仓库）：', this._llmApiKey || '');
-                    else if (window && typeof window.prompt === 'function') value = window.prompt('请输入 LLM API Key（仅存内存）：', this._llmApiKey || '');
-                } catch (e) { value = null; }
-                if (value === null || value === undefined) return;
-                if (!String(value).trim()) { console.warn('%c[GUI] 未填写 Key，保持原配置不变', 'color:#FF9800'); return; }
-                this.setLlmKey(value);
-            },
+
             // ================= F10（V3.5）：LLM 互动题应答（默认关闭，需显式开启 + 提供 Key） =================
-            setLlmKey(key) {
-                this._llmApiKey = String(key == null ? '' : key).trim();
-                const masked = this._llmApiKey ? (this._llmApiKey.slice(0, 5) + '***' + this._llmApiKey.slice(-4)) : '(空)';
-                console.log('%c[LLM] API Key 已更新（只存内存）: ' + masked, 'color:#2196F3');
-                this._guiRefreshStatus(true);
-                return this._llmApiKey.length > 0;
-            },
-            setLlmTransport(fn) {
-                this._llmTransport = typeof fn === 'function' ? fn : null;
-                console.log('%c[LLM] ' + (this._llmTransport ? '已设置' : '已清除') + '自定义传输实现', 'color:#2196F3');
-                return !!this._llmTransport;
-            },
-            _llmSession() {
-                if (!this._llmSessionId) {
-                    let id = '';
-                    try {
-                        if (window && window.crypto && typeof window.crypto.randomUUID === 'function') {
-                            id = window.crypto.randomUUID();
-                        }
-                    } catch (e) { id = ''; }
-                    if (!id) id = 'xt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-                    this._llmSessionId = id;
-                    console.log('%c[LLM] 生成本会话路由 ID（x-opencode-session，会话内固定复用）: ' + id, 'color:#607D8B');
-                }
-                return this._llmSessionId;
-            },
-            _llmCancelInFlight(reason) {
-                if (!this._llmInFlight && !this._llmAbort) return;
-                try { if (typeof this._llmAbort === 'function') this._llmAbort(); } catch (e) { /* ignore */ }
-                this._llmAbort = null;
-                this._llmInFlight = false;
-                if (reason) console.log('%c[LLM] 已中止在途请求（' + reason + '）', 'color:#607D8B');
-            },
-            _llmRequest(payload, onDone, onFail) {
-                const cfg = this.configs;
-                const timeoutMs = Math.max(1000, Number(cfg.llmTimeoutMs) || 30000);
-                let timer = null;
-                let settled = false;
-                const finish = (ok, a, b) => {
-                    if (settled) return;
-                    settled = true;
-                    this._llmInFlight = false;
-                    this._llmAbort = null;
-                    if (timer) this._cancelTimer(timer);
-                    try { if (ok) onDone(a, b); else onFail(a); } catch (e) { console.error('[LLM] 回调处理失败:', e); }
-                };
-                const transport = this._llmTransport || ((opts) => {
-                    let gm = null;
-                    try {
-                        if (typeof GM_xmlhttpRequest !== 'undefined' && GM_xmlhttpRequest) gm = GM_xmlhttpRequest;
-                        else if (window && window.GM_xmlhttpRequest) gm = window.GM_xmlhttpRequest;
-                    } catch (e) { gm = null; }
-                    if (typeof gm !== 'function') {
-                        opts.onerror(new Error('当前环境没有 GM_xmlhttpRequest：请使用油猴版 v3_optimized.user.js，或先用 app.setLlmTransport(fn) 注入传输实现'));
-                        return null;
-                    }
-                    return gm({
-                        method: opts.method,
-                        url: opts.url,
-                        headers: opts.headers,
-                        data: opts.data,
-                        timeout: opts.timeout,
-                        onload: (res) => opts.onload(res && res.status, res && res.responseText),
-                        onerror: (err) => opts.onerror(err || new Error('LLM 网络错误')),
-                        ontimeout: () => opts.onerror(new Error('LLM 请求超时')),
-                    });
-                });
-                this._llmInFlight = true;
-                timer = this._schedule(() => finish(false, new Error('LLM 请求超时（' + timeoutMs + 'ms）')), timeoutMs);
-                let handle = null;
-                try {
-                    handle = transport({
-                        method: 'POST',
-                        url: cfg.llmEndpoint,
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': 'Bearer ' + this._llmApiKey,
-                            'x-opencode-session': this._llmSession(),
-                        },
-                        data: JSON.stringify(payload),
-                        timeout: timeoutMs,
-                        onload: (status, text) => {
-                            if (status && (Number(status) < 200 || Number(status) >= 300)) {
-                                finish(false, new Error('HTTP ' + status + '：' + String(text || '').slice(0, 200)));
-                                return;
-                            }
-                            // OpenAI 兼容信封解包：只把助手正文（content）交给答案解析，绝不把整个响应/推理过程当答案。
-                            let content = '';
-                            let finishReason = '';
-                            try {
-                                const data = JSON.parse(String(text || ''));
-                                const choice = data && data.choices && data.choices[0];
-                                const msg = choice && choice.message;
-                                content = String((msg && (msg.content || msg.reasoning_content)) || '');
-                                finishReason = String((choice && choice.finish_reason) || '');
-                            } catch (e) { content = ''; }
-                            if (!content.trim()) {
-                                const reason = finishReason === 'length'
-                                    ? '推理 token 耗尽（finish_reason=length）：请增大 llmMaxTokens'
-                                    : '模型返回内容为空（响应格式异常或网关错误）';
-                                finish(false, new Error(reason));
-                                return;
-                            }
-                            finish(true, content);
-                        },
-                        onerror: (err) => finish(false, err && err.message ? err : new Error(String(err || 'LLM 网络错误'))),
-                    });
-                } catch (e) { finish(false, e); return; }
-                this._llmAbort = () => {
-                    if (handle && typeof handle.abort === 'function') {
-                        try { handle.abort(); } catch (e) { /* ignore */ }
-                    }
-                };
-            },
-            _llmNormalizeJudge(text) {
-                const t = String(text == null ? '' : text).replace(/[\s\u0060*\u0022\u0027。．]+/g, '');
-                if (!t) return '';
-                if (/^(对|正确|是|√|T|true|yes)$/i.test(t)) return '对';
-                if (/^(错|错误|否|×|F|false|no)$/i.test(t)) return '错';
-                if (t.length <= 6 && /正确/.test(t)) return '对';
-                if (t.length <= 6 && /错误/.test(t)) return '错';
-                return '';
-            },
-            _llmExtractAnswer(text) {
-                const raw = String(text == null ? '' : text);
-                // 优先取「最后一个」JSON 对象：推理模型可能把示例/推理过程写进 content，末尾的才是最终答案。
-                const jsonCandidates = raw.match(/\{[^{}]{0,400}\}/g) || [];
-                for (let i = jsonCandidates.length - 1; i >= 0; i--) {
-                    try {
-                        const obj = JSON.parse(jsonCandidates[i]);
-                        const value = obj && (obj.answer != null ? obj.answer : (obj.result != null ? obj.result : obj.choice));
-                        if (value != null && String(value).trim()) return String(value).trim();
-                    } catch (e) { /* 继续尝试更早的 JSON */ }
-                }
-                const labeled = raw.match(/(?:答案|选项|answer)\s*[:：是为]?\s*([A-Ha-h])/i);
-                if (labeled && labeled[1]) return labeled[1].toUpperCase();
-                const compact = raw.replace(/[\s\u0060*\u0022\u0027。．]+/g, '');
-                if (compact.length <= 8) {
-                    const judge = this._llmNormalizeJudge(compact);
-                    if (judge) return judge;
-                }
-                const bracketed = raw.match(/(?:^|[^A-Za-z])([A-H])(?:\s*[\)、.．:：]|\s*$)/);
-                if (bracketed && bracketed[1]) return bracketed[1];
-                return '';
-            },
-            _llmBuildPayload(messages) {
-                const payload = {
-                    model: this.configs.llmModel,
-                    messages: messages,
-                    max_tokens: Math.max(256, Number(this.configs.llmMaxTokens) || 4096),
-                    temperature: 0,
-                };
-                if (this.configs.llmJsonMode !== false) {
-                    payload.response_format = { type: 'json_object' };
-                }
-                return payload;
-            },
-            _llmBuildMessages(question, options) {
-                const opts = Array.isArray(options) ? options : [];
-                const lines = opts.map((o, i) => {
-                    const label = o && o.letter ? String(o.letter) : String.fromCharCode(65 + i);
-                    const body = String(o && o.text ? o.text : '').replace(/^[A-H][、.．:：\s]+/, '').trim();
-                    return label + '、' + body;
-                });
-                const system = '你是课程答题助手。根据题目与选项选出唯一正确答案，只输出一个 JSON 对象，'
-                    + '不要解释、不要 Markdown、不要推理过程：{"answer":"选项字母"}。'
-                    + '判断题没有字母选项时，answer 输出 "对" 或 "错"。';
-                const user = '题目：' + String(question || '').slice(0, 500)
-                    + '\n选项：\n' + lines.join('\n')
-                    + '\n只输出 JSON，例如 {"answer":"A"}。';
-                return [
-                    { role: 'system', content: system },
-                    { role: 'user', content: user },
-                ];
-            },
-            _llmPickOption(options, answer) {
-                const list = Array.isArray(options) ? options : [];
-                const ans = String(answer == null ? '' : answer).trim();
-                if (!list.length || !ans) return null;
-                const upper = ans.toUpperCase();
-                for (const opt of list) {
-                    const letter = String(opt.letter || '').toUpperCase();
-                    if (letter && letter === upper) return opt;
-                    const t = String(opt.text || '').toUpperCase();
-                    if (t.indexOf(upper + '、') === 0 || t.indexOf(upper + '.') === 0 || t.indexOf(upper + '．') === 0) return opt;
-                }
-                const judge = this._llmNormalizeJudge(ans);
-                if (judge) {
-                    for (const opt of list) {
-                        const t = String(opt.text || '');
-                        if (judge === '对' && /正确|^对$|√|true/i.test(t)) return opt;
-                        if (judge === '错' && /错误|^错$|×|false/i.test(t)) return opt;
-                    }
-                }
-                const normalized = ans.replace(/^[A-Ha-h][、.．:：\s]*/, '').trim();
-                if (normalized) {
-                    for (const opt of list) {
-                        const t = String(opt.text || '').replace(/^[A-Ha-h][、.．:：\s]*/, '').trim();
-                        if (t && (t === normalized || t.indexOf(normalized) >= 0 || normalized.indexOf(t) >= 0)) return opt;
-                    }
-                }
-                return null;
-            },
-            _llmQuestionKey(found) {
-                const t = String((found && (found.questionText || found.text)) || '');
-                if (!t) return '';
-                let hash = 0;
-                for (let i = 0; i < t.length; i++) hash = ((hash << 5) - hash + t.charCodeAt(i)) | 0;
-                return 'q' + hash;
-            },
-            _canLlmAnswer(found) {
-                if (!this.configs.llmEnabled) return false;
-                if (!this._llmApiKey) {
-                    if (!this._llmWarnedNoKeyOnce) {
-                        this._llmWarnedNoKeyOnce = true;
-                        console.warn('%c[LLM] llmEnabled=true 但未配置 API Key：请点 GUI 面板「设置 Key」或执行 app.setLlmKey(...)；本题回退人工处理。', 'color:#FF9800');
-                    }
-                    return false;
-                }
-                if (!found || !Array.isArray(found.options) || found.options.length < 2) return false;
-                if (this._llmInFlight) return false;
-                if (!found.questionText && !found.text) return false;
-                if (this._llmAnswersThisSession >= Math.max(1, Number(this.configs.llmMaxAnswersPerSession) || 50)) return false;
-                return true;
-            },
-            _answerInteractionWithLlm(found) {
-                const questionKey = this._llmQuestionKey(found);
-                if (questionKey && questionKey === this._llmLastQuestionKey) return;
-                this._llmLastQuestionKey = questionKey;
-                const options = found.options.slice(0, 8).map((opt, index) => ({
-                    letter: opt.letter || String.fromCharCode(65 + index),
-                    text: opt.text,
-                    el: opt.el,
-                }));
-                const question = String(found.questionText || found.text || '').slice(0, 500);
-                console.log('%c[LLM] 检测到互动题，正在请求大模型作答（结果会显示在本面板）…', 'color:#2196F3');
-                this._guiRefreshStatus(true);
-                this._llmRequest(
-                    this._llmBuildPayload(this._llmBuildMessages(question, options)),
-                    (text) => this._applyInteractionAnswer(found, options, text),
-                    (err) => {
-                        console.warn('%c[LLM] 请求失败，回退为人工处理：' + (err && err.message ? err.message : String(err)), 'color:#FF9800');
-                        this._llmLastQuestionKey = '';
-                        if (!this._interactionBlocked) this._blockInteractionForManual(found);
-                    }
-                );
-            },
-            _applyInteractionAnswer(found, options, responseText) {
-                const answer = this._llmExtractAnswer(responseText);
-                const chosen = this._llmPickOption(options, answer);
-                if (!chosen || !chosen.el) {
-                    console.warn('%c[LLM] 无法解析答案（原始返回: ' + String(responseText || '').slice(0, 160) + '），回退为人工处理', 'color:#FF9800');
-                    this._llmLastQuestionKey = '';
-                    if (!this._interactionBlocked) this._blockInteractionForManual(found);
-                    return;
-                }
-                this._llmAnswersThisSession++;
-                this._llmLastAnswer = {
-                    q: String(found.text || '').slice(0, 40),
-                    a: String(answer || '').slice(0, 20),
-                };
-                try {
-                    if (typeof chosen.el.click === 'function') chosen.el.click();
-                    else if (chosen.el.querySelector) {
-                        const input = chosen.el.querySelector('input[type=radio], input[type=checkbox]');
-                        if (input && typeof input.click === 'function') input.click();
-                    }
-                } catch (e) {
-                    console.warn('%c[LLM] 选项点击失败：' + (e && e.message ? e.message : String(e)), 'color:#FF9800');
-                }
-                console.log('%c[LLM] 已选择答案 ' + answer + '（' + String(chosen.text || '').slice(0, 40) + '）', 'color:#9C27B0');
-                this._guiRefreshStatus(true);
-                const submitEl = this._findInteractionSubmit(found);
-                if (!submitEl) {
-                    console.warn('%c[LLM] 未找到提交/继续按钮：答案已选好，请手动提交（弹窗消失后脚本自动恢复）', 'color:#FF9800');
-                    return;
-                }
-                if (!this.configs.llmAutoSubmit) {
-                    console.log('%c[LLM] 半自动模式：答案已选好，请人工点击「提交/继续」；如需自动提交请开启 llmAutoSubmit', 'color:#607D8B');
-                    return;
-                }
-                const delay = 500 + Math.floor(Math.random() * 1000);
-                this._schedule(() => {
-                    try {
-                        submitEl.click();
-                        console.log('%c[LLM] 已自动点击提交/继续按钮', 'color:#9C27B0');
-                    } catch (e) {
-                        console.warn('%c[LLM] 提交按钮点击失败，请手动提交', 'color:#FF9800');
-                    }
-                }, delay);
-            },
-            _findInteractionSubmit(found) {
-                const scope = found && found.el;
-                if (!scope || !scope.querySelectorAll) return null;
-                const selectors = [
-                    '.answerQuestion .submitBtn',
-                    '.interaction .submitBtn',
-                    '[class*="answer"] [class*="btn"]',
-                    '[class*="question"] [class*="btn"]',
-                    'button',
-                    'a',
-                ];
-                const words = /^(提交|继续|下一节|确定|完成|我知道了|确定提交|继续播放)$/;
-                for (const sel of selectors) {
-                    let nodes = [];
-                    try { nodes = Array.from(scope.querySelectorAll(sel)); } catch (e) { nodes = []; }
-                    for (const node of nodes) {
-                        const t = String(node.textContent || '').replace(/\s+/g, '');
-                        if (words.test(t)) return node;
-                    }
-                }
-                return null;
-            },
-            _extractInteractionOptions(nodes) {
-                const optionRe = /^[A-H][、.．:：\s]|^(对|错|正确|错误)\s*$/;
-                const out = [];
-                const list = Array.from(nodes || []);
-                for (const node of list) {
-                    const t = String(node.textContent || node.value || '').replace(/\s+/g, ' ').trim();
-                    if (!t || t.length > 60) continue;
-                    if (!optionRe.test(t)) continue;
-                    if (out.some((o) => o.text === t)) continue;
-                    let letter = '';
-                    const m = t.match(/^([A-H])[、.．:：\s]/);
-                    if (m) letter = m[1];
-                    else if (/^(对|正确)\s*$/.test(t)) letter = 'A';
-                    else if (/^(错|错误)\s*$/.test(t)) letter = 'B';
-                    out.push({ el: node, text: t, letter: letter });
-                    if (out.length >= 8) break;
-                }
-                return out;
-            },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             // ================= F10（V3.5，实验性）：章节测验建议答案（仅面板提示，绝不自动点击） =================
-            _collectChapterTestQuestions() {
-                const out = [];
-                if (typeof document === 'undefined' || !document.querySelectorAll) return out;
-                let boxes = [];
-                try {
-                    boxes = Array.from(document.querySelectorAll('.TiMu, [class*="TiMu"], .questionLi, [class*="questionLi"]'));
-                } catch (e) { boxes = []; }
-                for (const box of boxes) {
-                    if (out.length >= 10) break;
-                    try {
-                        if (!this._isVisible(box)) continue;
-                    } catch (e) { /* ignore */ }
-                    let titleEl = null;
-                    try { titleEl = box.querySelector('.Zy_TItle, .tiTitle, [class*="TiMu"] .fl, [class*="title"]'); } catch (e) { titleEl = null; }
-                    const question = String((titleEl && titleEl.textContent) || box.textContent || '').replace(/\s+/g, ' ').trim();
-                    if (question.length < 4) continue;
-                    let optionNodes = [];
-                    try { optionNodes = Array.from(box.querySelectorAll('.Zy_ulTop li, .answerList li, ul li, label')); } catch (e) { optionNodes = []; }
-                    const options = [];
-                    for (const node of optionNodes) {
-                        const t = String(node.textContent || '').replace(/\s+/g, ' ').trim();
-                        if (!t || t.length > 80) continue;
-                        if (t === question) continue;
-                        if (options.some((o) => o.text === t)) continue;
-                        options.push({ el: node, text: t, letter: String.fromCharCode(65 + options.length) });
-                        if (options.length >= 8) break;
-                    }
-                    if (options.length < 2) continue;
-                    const key = question.slice(0, 100);
-                    if (out.some((q) => q.key === key)) continue;
-                    out.push({ box: box, question: question, options: options, key: key });
-                }
-                return out;
-            },
-            _maybeSuggestChapterTest() {
-                if (!this.configs.llmChapterTest || !this.configs.llmEnabled) return false;
-                if (this._llmChapterSuggesting || this._llmChapterSuggestDone) return true;
-                if (!this._llmApiKey) {
-                    console.warn('%c[LLM] llmChapterTest 已开启但未配置 API Key：维持默认「受限跳过」章节测验行为', 'color:#FF9800');
-                    return false;
-                }
-                const questions = this._collectChapterTestQuestions();
-                if (!questions.length) {
-                    console.warn('%c[LLM] 章节测验页未识别出题目结构（实验性功能，需实机采样校准），维持默认跳过行为', 'color:#FF9800');
-                    return false;
-                }
-                this._llmChapterSuggesting = true;
-                console.log('%c[LLM] 章节测验：识别到 ' + questions.length + ' 道题，将逐题在面板给出建议答案（本版不会自动点击，请人工确认提交）', 'color:#9C27B0');
-                this._askChapterTestQuestions(questions, 0);
-                return true;
-            },
-            _askChapterTestQuestions(queue, index) {
-                if (!queue || index >= queue.length) {
-                    this._llmChapterSuggesting = false;
-                    this._llmChapterSuggestDone = true;
-                    console.log('%c[LLM] 章节测验建议已全部给出：请核对后手工作答并提交；本版不会自动点击测验选项', 'color:#4CAF50');
-                    this._guiRefreshStatus(true);
-                    return;
-                }
-                if (this._llmInFlight) {
-                    this._schedule(() => this._askChapterTestQuestions(queue, index), 1000);
-                    return;
-                }
-                const item = queue[index];
-                this._llmRequest(
-                    this._llmBuildPayload(this._llmBuildMessages(item.question, item.options)),
-                    (text) => {
-                        const answer = this._llmExtractAnswer(text);
-                        const chosen = this._llmPickOption(item.options, answer);
-                        this._llmChapterSuggestedCount++;
-                        this._llmLastAnswer = { q: item.question.slice(0, 40), a: (answer || '解析失败') };
-                        console.log('%c[章节测验建议 ' + (index + 1) + '/' + queue.length + '] ' + item.question.slice(0, 60) + ' → ' + (answer || '解析失败')
-                            + (chosen ? '（对应选项：' + String(chosen.text || '').slice(0, 30) + '）' : ''), 'color:#9C27B0');
-                        this._guiRefreshStatus(true);
-                        this._askChapterTestQuestions(queue, index + 1);
-                    },
-                    (err) => {
-                        console.warn('%c[章节测验建议] 第 ' + (index + 1) + ' 题请求失败：' + (err && err.message ? err.message : String(err)), 'color:#FF9800');
-                        this._askChapterTestQuestions(queue, index + 1);
-                    }
-                );
-            },
+
+
+
             // ================= F11（V3.6）：内嵌章节测验/作业（work）自动作答 =================
-            _findUnfinishedWorks() {
-                const found = [];
-                const seen = new Set();
-                const visit = (doc, depth) => {
-                    if (!doc || depth > 6 || seen.has(doc)) return;
-                    seen.add(doc);
-                    let frames = [];
-                    try { frames = Array.from(doc.querySelectorAll('iframe, frame')); } catch (e) { frames = []; }
-                    for (const frame of frames) {
-                        let jobid = '';
-                        try { jobid = frame.getAttribute ? String(frame.getAttribute('jobid') || '') : ''; } catch (e) { jobid = ''; }
-                        let childDoc = null;
-                        try { childDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null); } catch (e) { childDoc = null; }
-                        if (jobid && jobid.indexOf('work-') === 0) {
-                            let holder = null;
-                            try { holder = frame.closest ? frame.closest('.ans-attach-ct') : null; } catch (e) { holder = null; }
-                            let finished = false;
-                            try { finished = holder ? holder.classList.contains('ans-job-finished') : false; } catch (e) { finished = false; }
-                            let data = {};
-                            try { data = JSON.parse(frame.getAttribute('data') || '{}'); } catch (e) { data = {}; }
-                            found.push({ frame: frame, holder: holder, finished: finished, jobid: jobid, title: data.title || '', worktype: data.worktype || '' });
-                            continue;
-                        }
-                        if (childDoc) visit(childDoc, depth + 1);
-                    }
-                };
-                visit(typeof document === 'undefined' ? null : document, 0);
-                return found;
-            },
-            _hasUnfinishedEmbeddedWork() {
-                try { return this._findUnfinishedWorks().some((w) => !w.finished); } catch (e) { return false; }
-            },
-            _quizDocOf(workFrame) {
-                let doc = null;
-                try { doc = workFrame.contentDocument; } catch (e) { doc = null; }
-                if (!doc) return null;
-                let inner = null;
-                try { inner = doc.querySelector('#frame_content'); } catch (e) { inner = null; }
-                if (inner) {
-                    try {
-                        const d = inner.contentDocument;
-                        if (d && d.querySelector && d.querySelector('.TiMu')) return { doc: d, win: d.defaultView, frame: inner };
-                    } catch (e) { /* ignore */ }
-                }
-                try {
-                    if (doc.querySelector && doc.querySelector('.TiMu')) return { doc: doc, win: doc.defaultView, frame: null };
-                } catch (e) { /* ignore */ }
-                return null;
-            },
-            _workQuestionList(quizDoc) {
-                const win = quizDoc.defaultView;
-                const out = [];
-                let timus = [];
-                try { timus = Array.from(quizDoc.querySelectorAll('.TiMu')); } catch (e) { timus = []; }
-                timus.forEach((timu) => {
-                    let typeLabel = '';
-                    let rawText = '';
-                    try { typeLabel = ((timu.querySelector('.newZy_TItle') || {}).textContent || '').replace(/\s+/g, ''); } catch (e) { typeLabel = ''; }
-                    try { rawText = ((timu.querySelector('.Zy_TItle') || {}).textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) { rawText = ''; }
-                    let textarea = null;
-                    try { textarea = timu.querySelector('textarea[id^="answer"]'); } catch (e) { textarea = null; }
-                    if (!textarea) { try { textarea = quizDoc.querySelector('textarea[id^="answer"]'); } catch (e) { textarea = null; } }
-                    const answerId = textarea ? String(textarea.id).replace(/^answer/, '') : '';
-                    let typeCode = '';
-                    try { typeCode = answerId && win.jQuery ? String(win.jQuery('#answertype' + answerId).val() || '') : ''; } catch (e) { typeCode = ''; }
-                    const isShortAnswer = /简答|论述|分析|写作/.test(typeLabel) || ['4', '5', '18', '26'].indexOf(typeCode) >= 0;
-                    let optionEls = [];
-                    if (!isShortAnswer) {
-                        try { optionEls = Array.from(timu.querySelectorAll('.Zy_ulTop li, .Zy_ulTk li')).map((li) => ({ el: li, text: (li.textContent || '').replace(/\s+/g, ' ').trim() })); } catch (e) { optionEls = []; }
-                    }
-                    out.push({ typeLabel: typeLabel, typeCode: typeCode, rawText: rawText, answerId: answerId, textarea: textarea, isShortAnswer: isShortAnswer, optionEls: optionEls });
-                });
-                return out;
-            },
-            _workPlainTexts(title, count) {
-                const t = String(title || '').replace(/\s+/g, ' ').trim();
-                if (!t) return [];
-                const parts = [];
-                const re = /(?:^|\s)(\d{1,2})\s*[.、．]\s*/g;
-                let last = -1;
-                let m = null;
-                while ((m = re.exec(t))) {
-                    if (last >= 0) parts.push(t.slice(last, m.index).trim());
-                    last = re.lastIndex;
-                }
-                if (last >= 0) parts.push(t.slice(last).trim());
-                const cleaned = parts.map((s) => s.replace(/[。；;]$/, '')).filter(Boolean);
-                if (cleaned.length >= count) return cleaned.slice(0, count);
-                if (count === 1) return [t];
-                return cleaned;
-            },
-            _llmBuildShortMessages(question) {
-                // 注意：llmJsonMode 下 response_format=json_object 要求提示词必须包含 "json" 字样，否则网关返回 400（真机演练实证）。
-                return [
-                    { role: 'system', content: '你是课程答题助手。请直接给出简洁的参考答案，只输出一个 JSON 对象：{"answer":"答案正文"}，不要解释、不要 Markdown、不要推理过程。' },
-                    { role: 'user', content: '题目：' + String(question || '').slice(0, 500) + '\n只输出 JSON，例如 {"answer":"..."}。' },
-                ];
-            },
-            _llmExtractFreeText(content) {
-                const raw = String(content == null ? '' : content).trim();
-                if (!raw) return '';
-                const jsonMatch = raw.match(/\{[\s\S]{0,400}\}/);
-                if (jsonMatch) {
-                    try {
-                        const obj = JSON.parse(jsonMatch[0]);
-                        const v = obj && (obj.answer != null ? obj.answer : obj.result);
-                        if (v != null && String(v).trim()) return String(v).trim();
-                    } catch (e) { /* 按纯文本处理 */ }
-                }
-                return raw.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim().slice(0, 1200);
-            },
-            _fillWorkAnswer(quizWin, question, text) {
-                const ue = quizWin && quizWin.UE;
-                if (!ue || !ue.instants) return false;
-                const wantKey = 'answer' + question.answerId;
-                let editor = null;
-                for (const key of Object.keys(ue.instants)) {
-                    const candidate = ue.instants[key];
-                    if (candidate && candidate.textarea && String(candidate.textarea.id) === wantKey) { editor = candidate; break; }
-                }
-                if (!editor) editor = ue.instants[wantKey] || null;
-                if (!editor || !editor.body) return false;
-                try {
-                    editor.body.innerHTML = '<p>' + String(text == null ? '' : text).replace(/[<>]/g, '') + '</p>';
-                    if (typeof editor.sync === 'function') editor.sync();
-                    // 关键：页面提交时按 answer<id> 键查找实例，未注册会导致其内部 try/catch 静默失败（真机演练实证）。
-                    if (!ue.instants[wantKey]) ue.instants[wantKey] = editor;
-                    return true;
-                } catch (e) { return false; }
-            },
-            _workLooksSubmitted(work) {
-                // 任务点标记可能延迟：工作页出现「待批阅/已完成/已提交」也算提交成功（真机演练：待批阅 + ans-job-finished 延迟）。
-                try {
-                    const quiz = this._quizDocOf(work.frame);
-                    if (quiz && quiz.doc && quiz.doc.body) {
-                        const t = String(quiz.doc.body.innerText || '');
-                        return /待批阅|已完成|已提交/.test(t);
-                    }
-                } catch (e) { /* ignore */ }
-                return false;
-            },
-            _submitWork(quizWin, topDoc, done) {
-                const clickConfirm = () => {
-                    try {
-                        const all = Array.from(topDoc.querySelectorAll('a, button, span'));
-                        const btn = all.filter((el) => {
-                            const t = (el.innerText || '').trim();
-                            if (t !== '提交') return false;
-                            return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-                        })[0];
-                        if (btn) { btn.click(); return true; }
-                    } catch (e) { /* ignore */ }
-                    return false;
-                };
-                const tryClick = (left) => {
-                    if (clickConfirm()) { done(true, ''); return; }
-                    if (left <= 0) { done(false, '未找到确认提交弹窗（可能被风控拦截）'); return; }
-                    this._schedule(() => tryClick(left - 1), 500);
-                };
-                try {
-                    const before = this._findUnfinishedWorks().filter((w) => !w.finished).length;
-                    if (typeof quizWin.btnBlueSubmit === 'function') quizWin.btnBlueSubmit();
-                    else {
-                        const el = quizWin.document.querySelector('.btnSubmit');
-                        if (!el) { done(false, '未找到提交按钮'); return; }
-                        el.click();
-                    }
-                    this._schedule(() => tryClick(20), 900);
-                } catch (e) {
-                    done(false, '提交入口调用失败：' + (e && e.message ? e.message : e));
-                }
-            },
-            _handleEmbeddedWorks() {
-                if (this._workBusy) return true;
-                const works = this._findUnfinishedWorks().filter((w) => !w.finished);
-                if (!works.length) return false;
-                if (!this.configs.llmEnabled || !this.configs.llmEmbeddedWork) {
-                    console.warn('%c[LLM] 检测到 ' + works.length + ' 个未完成的内嵌章节测验/作业：按当前配置不自动作答，已停止自动前进（绝不跳过）。'
-                        + '开启自动作答：app.configs.llmEmbeddedWork = true（需先配置 LLM Key）', 'color:#FF9800');
-                    return true;
-                }
-                if (!this._llmApiKey) {
-                    console.warn('%c[LLM] 检测到未完成的内嵌章节测验，但未配置 API Key：已停止自动前进，请配置后重试', 'color:#FF9800');
-                    return true;
-                }
-                this._workBusy = true;
-                console.log('%c[LLM] 检测到 ' + works.length + ' 个未完成的内嵌章节测验/作业，开始逐题作答（仅简答题会自动填写，提交走平台原生流程）…', 'color:#2196F3');
-                const nextWork = (wi) => {
-                    if (wi >= works.length) {
-                        this._workBusy = false;
-                        console.log('%c[LLM] 内嵌章节测验/作业已全部提交完成，继续推进', 'color:#4CAF50');
-                        this._schedule(() => {
-                            let videoDone = true;
-                            try {
-                                const frames = this._getVideoTaskFrames();
-                                if (frames && frames.length) videoDone = this._areAllVideoTasksComplete(frames);
-                            } catch (e) { videoDone = true; }
-                            if (videoDone) this.nextUnit(); else this.play();
-                        }, 2500);
-                        return;
-                    }
-                    const work = works[wi];
-                    const quiz = this._quizDocOf(work.frame);
-                    if (!quiz || !quiz.doc) {
-                        this._workBusy = false;
-                        console.warn('%c[LLM] 未能定位测验内容，已停止自动前进（绝不跳过）', 'color:#FF9800');
-                        return;
-                    }
-                    const questions = this._workQuestionList(quiz.doc);
-                    if (!questions.length) {
-                        this._workBusy = false;
-                        console.warn('%c[LLM] 未识别到题目结构，已停止自动前进（绝不跳过）', 'color:#FF9800');
-                        return;
-                    }
-                    const texts = this._workPlainTexts(work.title, questions.length);
-                    console.log('%c[LLM] 作业《' + String(work.title || work.jobid).slice(0, 60) + '》共 ' + questions.length + ' 题', 'color:#2196F3');
-                    const giveUp = (msg) => {
-                        this._workBusy = false;
-                        console.warn('%c[LLM] 内嵌测验自动作答失败：' + msg + '；已停止自动前进，请人工处理', 'color:#FF9800');
-                    };
-                    const askNext = (qi) => {
-                        if (qi >= questions.length) {
-                            this._submitWork(quiz.win, document, (ok, msg) => {
-                                if (!ok) { giveUp(msg); return; }
-                                const waitDone = (left) => {
-                                    const all = this._findUnfinishedWorks();
-                                    const target = all.filter((w) => w.jobid === work.jobid)[0];
-                                    const submitted = target ? (target.finished || this._workLooksSubmitted(target)) : true;
-                                    if (submitted) { nextWork(wi + 1); return; }
-                                    if (left <= 0) { giveUp('提交后任务点未标记完成（可能进入人工批阅或需要验证码）'); return; }
-                                    this._schedule(() => waitDone(left - 1), 2000);
-                                };
-                                this._schedule(() => waitDone(Math.max(3, Math.ceil((Number(this.configs.llmWorkWaitMs) || 45000) / 2000))), 800);
-                            });
-                            return;
-                        }
-                        const q = questions[qi];
-                        const questionText = texts[qi] || q.rawText || String(work.title || '');
-                        if (q.isShortAnswer) {
-                            console.log('%c[LLM] 第 ' + (qi + 1) + ' 题（简答）作答中：' + String(questionText).slice(0, 50), 'color:#2196F3');
-                            this._llmRequest(
-                                this._llmBuildPayload(this._llmBuildShortMessages(questionText)),
-                                (content) => {
-                                    const text = this._llmExtractFreeText(content);
-                                    const ok = this._fillWorkAnswer(quiz.win, q, text);
-                                    console.log('%c[LLM] 第 ' + (qi + 1) + ' 题答案' + (ok ? '已填入编辑器' : '填充失败') + '：' + String(text).slice(0, 60), ok ? 'color:#9C27B0' : 'color:#FF9800');
-                                    if (!ok) { giveUp('第 ' + (qi + 1) + ' 题答案填充失败'); return; }
-                                    askNext(qi + 1);
-                                },
-                                (err) => giveUp('第 ' + (qi + 1) + ' 题请求失败：' + (err && err.message ? err.message : err))
-                            );
-                            return;
-                        }
-                        const options = q.optionEls.map((o, i) => ({ el: o.el, text: o.text, letter: String.fromCharCode(65 + i) }));
-                        this._llmRequest(
-                            this._llmBuildPayload(this._llmBuildMessages(questionText, options)),
-                            (content) => {
-                                const answer = this._llmExtractAnswer(content);
-                                const chosen = this._llmPickOption(options, answer);
-                                if (!chosen) { giveUp('第 ' + (qi + 1) + ' 题无法匹配选项（选项可能被字体混淆）'); return; }
-                                try { chosen.el.click(); } catch (e) { /* ignore */ }
-                                console.log('%c[LLM] 第 ' + (qi + 1) + ' 题已选择：' + String(chosen.text || '').slice(0, 40), 'color:#9C27B0');
-                                askNext(qi + 1);
-                            },
-                            (err) => giveUp('第 ' + (qi + 1) + ' 题请求失败：' + (err && err.message ? err.message : err))
-                        );
-                    };
-                    askNext(0);
-                };
-                nextWork(0);
-                return true;
-            },
+
+
+
+
+
+
+
+
+
+
+
             // ================= F13（V3.6）：文档任务点（PDF/PPT/教案）自动翻阅 =================
             _findDocTaskFrames() {
                 const found = [];
@@ -3459,7 +2738,6 @@
                 // F9（V3.5）：移除 GUI 面板并注销 console 镜像，避免脚本重载后面板/监听叠加。
                 this._guiDestroy();
                 // F10（V3.5）：中止在途 LLM 请求，避免 destroy 后回调再操作页面。
-                this._llmCancelInFlight('destroy');
                 // F4（#32 #54 #55）：守卫相关的延时器、视频事件、用户交互监听全部清理干净。
                 this._clearTimers();
                 this._detachVideoEvents();
@@ -3497,8 +2775,8 @@
 
         window.app = app;
         window[APP_KEY] = app;
-        // F10（V3.5）：油猴 @grant GM_xmlhttpRequest 后脚本运行在沙箱中，
-        // 补一条 unsafeWindow 桥，保证页面控制台里的 app.run()/app.setLlmKey() 调试流程仍可用。
+        // 油猴带 @grant 时脚本运行在沙箱中，
+        // 补一条 unsafeWindow 桥，保证页面控制台里的 app.run() 等调试流程仍可用。
         try {
             if (typeof unsafeWindow !== 'undefined' && unsafeWindow && unsafeWindow !== window) {
                 unsafeWindow.app = app;

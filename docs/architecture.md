@@ -121,6 +121,10 @@ _userPaused = true（不再抢播）     按页面行为处理：拦截或自动
 
 改完必须让 `test-pause-fix.mjs` 的判定矩阵全绿（6 个场景）。加新场景比改阈值更划算。
 
+> **F20（本地修复）改变了这个判定的最终效果**：`respectUserPause` 默认为 `false`，此时"用户主动暂停"不再是最终决定 ——
+> 暂停事件只会被记一条日志，随后仍按有界策略自动恢复；只有把 `respectUserPause` 显式设为 `true` 才回到上游"尊重用户暂停"的行为。
+> 也就是说 `_isUserPauseIntent()` 现在只影响"是否写 `_userPaused`"与 `pauseGuard` 的拦截判定，而停下来这件事交给了配置。
+
 ---
 
 ## 7. 状态字段速查
@@ -170,12 +174,7 @@ _userPaused = true（不再抢播）     按页面行为处理：拦截或自动
 | 字段 | 含义 |
 | --- | --- |
 | `_interactionBlocked` / `_interactionWatcher` | 互动题弹窗导致暂停自动跳转 / 检测用的 interval |
-| `_llmApiKey` / `_llmSessionId` / `_llmTransport` | 密钥（仅内存）/ 会话路由 ID / 自定义传输实现 |
-| `_llmInFlight` / `_llmAbort` | 是否有在途请求 / 中止句柄 |
-| `_llmAnswersThisSession` / `_llmLastAnswer` / `_llmLastQuestionKey` | 本会话应答数 / 最近答案 / 同题去重键 |
 | `_llmWarnedNoKeyOnce` | "开了 LLM 但没配密钥"只提示一次 |
-| `_llmChapterSuggesting` / `_llmChapterSuggestDone` / `_llmChapterSuggestedCount` | 章节测验建议（只提示、不点击）的进行状态 |
-| `_workBusy` / `_docTaskBusy` | 内嵌作业 / 文档任务点的处理中标志 |
 
 **GUI**
 
@@ -281,8 +280,6 @@ _userPaused = true（不再抢播）     按页面行为处理：拦截或自动
 | F6 | 少量播放器识别不到 video | `_videoSelectors()` / `_getVideoEl()` / `_invalidateVideoCache()` |
 | F7 | 粘完没反应、文档链接失效 | IIFE 入口 / `waitForCoursePage()` |
 | F9 | 运行情况只能看控制台 | `_guiInit()` 等 |
-| F10 | 互动题需人工作答（可选 LLM） | `_answerInteractionWithLlm()` |
-| F11 | 内嵌章节测验/作业（默认关闭） | `_handleEmbeddedWorks()` |
 | F12 | 片尾停滞保护 | `_checkVideoStatus()` 内的 `videoCompleteRatio` 分支 |
 | F13 | 文档任务点自动翻阅（默认关闭） | `_handleDocTasks()` |
 | F15 | 拦截平台防挂机暂停 | `_installPauseGuard()` |
@@ -297,3 +294,6 @@ _userPaused = true（不再抢播）     按页面行为处理：拦截或自动
 3. **面板拖动位置不持久化**（遵循"不写 localStorage"的取舍）；想持久化需要先讨论是否接受落盘。
 4. **章节测验/作业自动作答**默认关闭，本项目不跟进、也不做绕过风控的对抗（`ratechange` 回写、验证码绕过等一律不做）。
 5. **上游若发布新版本**：按第 11 节的流程把本地补丁重新叠一遍；`docs/` 下每份补丁文档都写了"改动点在哪、怎么回滚"。
+6. **默认"始终自动恢复"的风控取舍**：本仓库把 `respectUserPause` 默认设为 `false`（见 F20），因为项目所有者更看重"视频一直在播"。
+   代价是：用户点暂停也会被自动恢复，且无差别 `play()` 更容易触发平台风控（上游 #26 #32 #54 #55 正是为此才改成"尊重用户暂停"）。
+   想回到保守行为：`app.configs.respectUserPause = true; app.run()`。

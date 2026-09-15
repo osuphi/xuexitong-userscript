@@ -44,4 +44,4 @@ if (problems.length) {
     for (const problem of problems) console.error('  - ' + problem);
     process.exit(1);
 }
-console.log(`✓ 红线扫描通过：${forbidden.length} 类禁止写法 0 命中；裸 setTimeout 2 处；外部 URL 仅 ${urls.length} 个（jQuery CDN + LLM 端点）`);
+console.log(`✓ 红线扫描通过：${forbidden.length} 类禁止写法 0 命中；裸 setTimeout 2 处；外部 URL 仅 ${urls.length} 个`);

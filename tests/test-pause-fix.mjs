@@ -55,7 +55,7 @@ check('用户暂停时走节流提示 _noteUserPausedStall',
     /if \(this\._userPaused\) \{[^]*?_noteUserPausedStall\(\)/.test(source));
 check('节流提示有 60 秒节流窗口', /_noteUserPausedStall\(\) \{[\s\S]{0,400}60000/.test(source));
 check('重新播放会复位提示节流', /this\._userPaused = false;\s*\n\s*this\._userPausedNoticeTs = 0;/.test(source));
-check('面板状态行会显示用户暂停', source.indexOf('用户暂停: ') >= 0);
+check('面板状态行会显示当前恢复策略', source.indexOf('恢复策略: ') >= 0);
 // 与上游对抗测试一致：静态扫描前先去掉行注释（注释里出现这些词是允许的，代码里不行）
 const codeOnly = source.replace(/^\s*\/\/.*$/gm, '');
 check('去注释后没有 preventDefault / stopPropagation',
@@ -99,6 +99,38 @@ check('pauseGuard 会拦截"刚恢复后"的暂停', /self\._wasJustUserResumed\
 check('_handleVideoPause 使用 _isUserPauseIntent', /_handleVideoPause\(e\) \{[\s\S]{0,500}?_isUserPauseIntent\(now\)/.test(source));
 check('_handleVideoPlay 记录用户触发的 play', /this\._userPausedNoticeTs = 0;[\s\S]{0,600}?this\._lastUserPlayTs = nowPlay;/.test(source));
 check('新增配置项存在', /userIntentMatchMs: 800/.test(source) && /userResumeGraceMs: 3000/.test(source));
+
+// ---------- 6) F20：默认「始终自动恢复」，不再把用户暂停当最终决定 ----------
+console.log('6) F20：respectUserPause 默认关闭 + 次数上限支持"不限"');
+check('配置项 respectUserPause 默认 false', /respectUserPause: false,/.test(source));
+check('_userPaused 只在 respectUserPause === true 时才置位',
+    /if \(userIntent && this\.configs\.respectUserPause === true\) \{[\s\S]{0,200}?this\._userPaused = true;/.test(source));
+check('默认路径会明确提示"始终自动恢复"', source.indexOf('但当前配置为「始终自动恢复」') >= 0);
+check('三处次数上限都改走 _resumeCap()', (source.match(/this\._resumeCap\(\)/g) || []).length === 3);
+
+{
+    const capStart = source.indexOf('_resumeCap() {');
+    const capEnd = source.indexOf('\n            },', capStart);
+    if (capStart < 0 || capEnd < 0) {
+        console.error('✗ 找不到 _resumeCap');
+        process.exit(1);
+    }
+    const capHolder = vm.runInNewContext(
+        `(function () { return ({ ${source.slice(capStart, capEnd + 15)} }); })`,
+        sandbox,
+        { filename: 'resume-cap.js' },
+    )();
+    const capOf = (value) => {
+        const holder = Object.create(capHolder);
+        holder.configs = { resumeMaxAttemptsPerUnit: value };
+        return holder._resumeCap();
+    };
+    check('默认 5 次', capOf(5) === 5);
+    check('设为 0 → 不限次数（Infinity）', capOf(0) === Infinity);
+    check('缺省 → 保守默认 5', capOf(undefined) === 5);
+    check('负数/非法值 → 保守默认 5', capOf(-1) === 5 && capOf('abc') === 5);
+    check('可以调大，例如 50', capOf(50) === 50);
+}
 
 console.log('');
 if (failures) { console.log(`✗ ${failures} 项失败`); process.exit(1); }

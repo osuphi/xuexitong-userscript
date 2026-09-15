@@ -179,7 +179,7 @@ check('不带任何密钥字段', JSON.stringify(diag).indexOf('_llmApiKey') < 0
 
 console.log('5) exportDiagnostics：文本报告');
 const text = app.exportDiagnostics('txt');
-for (const heading of ['【运行状态】', '【视频】', '【frame 结构】', '【选择器命中数】', '【课程目录解析】', '【配置】', '【LLM】', '【捕获到的未处理错误】', '【完整日志】']) {
+for (const heading of ['【运行状态】', '【视频】', '【frame 结构】', '【选择器命中数】', '【课程目录解析】', '【配置】', '【捕获到的未处理错误】', '【完整日志】']) {
     check('报告含 ' + heading, text.indexOf(heading) >= 0);
 }
 check('报告里带上了最新日志', text.indexOf('x119') >= 0);

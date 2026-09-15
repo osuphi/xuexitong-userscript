@@ -1,10 +1,37 @@
 # 版本变更记录
 
-本项目基于上游 [`ywdddddddddd/xuexitongScript`](https://github.com/ywdddddddddd/xuexitongScript) 的 V3.6（其上游为 [`chaolucky18/xuexitongScript`](https://github.com/chaolucky18/xuexitongScript)）。
 
 版本号规则：`上游主版本.次版本.修订号.本地构建号`，例如 `3.6.0.6` —— 前三段跟上游，第四段每有一次本地改动 +1。油猴仪表盘与诊断报告里都能看到完整构建号。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+## [3.6.0.8] - 2026-09-15
+
+### 移除
+
+- **删除全部自动作答功能**：整个 LLM 子系统（\`_llm*\` 函数、11 个 \`llm*\` 配置项、密钥与在途请求状态、
+  面板上的「LLM 开/关」「自动提交 开/关」「设置 Key」按钮、\`setLlmKey\`/\`setLlmTransport\`、诊断报告里的 LLM 段落），
+  以及内嵌测验/作业的填答与提交（\`_fillWorkAnswer\`/\`_submitWork\`/\`_workQuestionList\`/\`_workPlainTexts\`/\`_workLooksSubmitted\`）。
+- 油猴元数据去掉 \`@connect opencode.ai\`；\`@grant GM_xmlhttpRequest\` 保留，但只是为了继续运行在沙箱里，脚本内已无任何网络调用。
+
+### 变更
+
+- **互动题弹窗**：只做检测 —— 命中后暂停自动跳转并提示人工完成（不再有"让模型选答案"的分支）。
+- **每节课末尾的章节测验/作业**：一律**直接跳过**（去掉了原来"未完成就停下不跳过"的阻塞逻辑）。
+- 删完后的外部请求只剩"页面缺 jQuery 时补加载 CDN"这一条，\`SECURITY.md\` 已同步重写。
+## [3.6.0.7] - 2026-09-15
+
+### 变更
+
+- **F20：默认"始终自动恢复"**。新增配置 `respectUserPause`，默认 `false` —— 不再把用户的主动暂停当作最终决定，
+  无论谁暂停（用户点的 / 页面防挂机 / 浏览器省电）都会按有界策略自动恢复；需要真正停下时关闭本脚本即可。
+  设为 `true` 可回到上游"尊重用户暂停"的行为。
+  取舍说明：上游选择"尊重用户暂停"是为了避免无差别 `play()` 触发风控（#26 #32 #54 #55），
+  本仓库改为优先保证"一直在播"，因此该配置默认关闭；担心风控可把 `resumeMaxAttemptsPerUnit` 保持在默认的 5 次。
+- `resumeMaxAttemptsPerUnit` 支持 **显式设为 `0` = 不限次数**（默认仍为 5），上限相关的提示文案会显示"不限"。
+- 面板状态行改为显示当前恢复策略（`始终自动` / `尊重暂停`），不再只显示"是否处于用户暂停状态"。
+- 新增 `_resumeCap()`：把三处次数上限判定收敛到一个函数，便于调整。
+
 
 ## [3.6.0.6] - 2026-09-14
 
@@ -19,7 +46,6 @@
 - **文档体系**：新增 `AGENTS.md`（给 AI/自动化助手的入口）、`docs/architecture.md`（架构与状态字段速查、
   红线、调试手册、测试与发版流程）、`docs/index.md`（文档索引）；补丁说明统一收纳到 `docs/patches/`。
 - **项目规范文件**：`.gitignore`、`.gitattributes`、`.editorconfig`、`CONTRIBUTING.md`、`SECURITY.md`、
-  `CODE_OF_CONDUCT.md`，以及 GitHub 的 issue / PR 模板。
 
 ### 变更
 

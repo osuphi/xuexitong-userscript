@@ -4,7 +4,7 @@
 
 ## 这个仓库是什么
 
-基于上游 `ywdddddddddd/xuexitongScript` 的 V3.6，叠加了若干本地补丁（面板拖动、诊断导出、F17/F18/F19 修复）。每个补丁都有对应的 `docs/*.md`。
+本仓库在 V3.6 基础上叠加了若干本地补丁（面板拖动、诊断导出、F17–F20 修复）；出处见 README「来源与致谢」。
 
 ## 改代码的硬性规则
 
@@ -25,7 +25,7 @@ node --check v3_optimized.js           # 语法
 node --check v3_optimized.user.js
 node tests/verify-sync.mjs             # 油猴版 = 元数据 + 源码
 node tests/test-startup.mjs            # 34 项
-node tests/test-pause-fix.mjs          # 33 项（含"用户意图判定矩阵"）
+node tests/test-pause-fix.mjs          # 45 项（含"用户意图判定矩阵"与恢复策略）
 node tests/test-diag.mjs               # 50 项
 ```
 
